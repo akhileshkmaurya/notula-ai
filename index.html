@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Notula-AI Starter</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    #controls { margin-bottom: 12px; }
+    button { margin-right: 8px; padding: 8px 12px; }
+    #transcript { white-space: pre-wrap; border: 1px solid #ddd; padding: 12px; height: 380px; overflow: auto; }
+    .status { margin-top: 8px; color: #666; }
+  </style>
+</head>
+<body>
+  <h1>Notula-AI — Starter</h1>
+  <div id="controls">
+    <button id="startBtn">Start Recording</button>
+    <button id="stopBtn" disabled>Stop Recording</button>
+    <button id="saveBtn" disabled>Save Transcript</button>
+  </div>
+  <div class="status" id="status">Status: idle</div>
+  <h3>Live Transcript</h3>
+  <div id="transcript">(no transcript yet)</div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
