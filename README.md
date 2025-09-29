@@ -1,4 +1,4 @@
-# Notula-AI — Starter Electron App (Microphone + System Audio Capture)
+# Notula-AI
 
 This repository is a starter Electron application that captures microphone and system audio,
 provides a UI to start/stop recording, saves a WAV file, and includes a placeholder for integrating
@@ -53,19 +53,12 @@ To enable real transcription using whisper.cpp you'll need to:
 - `preload.js` — Exposes safe IPC to renderer.
 - `renderer.js` — UI: start/stop recording, display live waveform (basic), transcript area.
 - `index.html` — Simple UI layout.
-- `recordings/` — Saved WAV files will be stored here after recording.
 
 ## Limitations and notes
 - This starter focuses on capturing audio and saving a WAV. Real-time Whisper integration is **not** auto-configured because
   whisper models are large and platform-native binaries vary by OS and architecture.
 - Speaker diarization is **not** included. You can add pyannote or similar tools for diarization and then merge outputs with Whisper timestamps.
 - Packaging for distribution (Windows .exe, macOS .app, Linux .deb/.AppImage) requires additional steps (`electron-builder` recommended).
-
-## Support
-If you want, I can:
-- Help integrate `@kutalia/whisper-node-addon` calls into this starter (I will provide the code to paste into `main.js` and explain how to download models).
-- Add a simple diarization flow using a best-effort JavaScript approach.
-- Create an automated packaging script (note: building native binaries for whisper.cpp per-platform cannot be done here).
 
 
 export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/legion/project91/notula-ai/node_modules/@kutalia/whisper-node-addon/dist/linux-x64

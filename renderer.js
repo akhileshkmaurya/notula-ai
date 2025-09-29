@@ -98,12 +98,15 @@ async function startRecording() {
   sysRecorder = null;
 
   try {
+    // microphone
     const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     micRecorder = await recordStream(micStream, micChunks);
 
-    let sysStream = null;
+    // system audio (requires video:true in Chromium/Electron)
     try {
-      sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: false });
+      const sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
+      // discard video tracks immediately
+      sysStream.getVideoTracks().forEach(track => track.stop());
       sysRecorder = await recordStream(sysStream, sysChunks);
     } catch (e) {
       console.warn('System audio capture denied/unavailable:', e);

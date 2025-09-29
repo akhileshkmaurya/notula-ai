@@ -42,6 +42,7 @@ app.on('window-all-closed', function () {
   if (process.platform !== 'darwin') app.quit();
 });
 
+// Save transcript file
 ipcMain.handle('save-transcript', async (event, { filename, content }) => {
   try {
     const recordingsDir = path.join(app.getPath('documents'), 'notula-ai-recordings');
@@ -89,4 +90,3 @@ ipcMain.handle('transcribe-both', async (event, { micPath, sysPath }) => {
     return { ok: false, error: String(err) };
   }
 });
-
