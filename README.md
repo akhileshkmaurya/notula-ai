@@ -66,3 +66,6 @@ If you want, I can:
 - Help integrate `@kutalia/whisper-node-addon` calls into this starter (I will provide the code to paste into `main.js` and explain how to download models).
 - Add a simple diarization flow using a best-effort JavaScript approach.
 - Create an automated packaging script (note: building native binaries for whisper.cpp per-platform cannot be done here).
+
+
+export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/legion/project91/notula-ai/node_modules/@kutalia/whisper-node-addon/dist/linux-x64

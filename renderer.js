@@ -1,76 +1,117 @@
-// Renderer: captures microphone audio and records to WAV PCM using Web Audio API.
-// Sends the WAV data to the main process for Whisper transcription.
-
 const startBtn = document.getElementById('startBtn');
 const stopBtn = document.getElementById('stopBtn');
 const saveBtn = document.getElementById('saveBtn');
 const statusEl = document.getElementById('status');
 const transcriptEl = document.getElementById('transcript');
 
-let audioCtx;
-let processor;
-let micStream;
-let recordedSamples = [];
-let recordingSampleRate = 16000; // Whisper prefers 16kHz
+let micRecorder, sysRecorder;
+let micChunks = [], sysChunks = [];
 
-function encodeWAV(samples, sampleRate) {
-  const buffer = new ArrayBuffer(44 + samples.length * 2);
+/* ---------- WAV Helpers ---------- */
+function createWavHeader(sampleRate, numChannels, numFrames) {
+  const buffer = new ArrayBuffer(44);
   const view = new DataView(buffer);
 
-  function writeString(view, offset, string) {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
+  function writeString(offset, str) {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
     }
   }
 
-  const length = samples.length * 2;
+  let blockAlign = numChannels * 2;
+  let byteRate = sampleRate * blockAlign;
+  let dataSize = numFrames * blockAlign;
 
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + length, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true); // PCM
-  view.setUint16(20, 1, true);  // Linear quantization
-  view.setUint16(22, 1, true);  // Mono
+  writeString(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, "WAVE");
+  writeString(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, numChannels, true);
   view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true); // byte rate
-  view.setUint16(32, 2, true);  // block align
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
   view.setUint16(34, 16, true); // bits per sample
-  writeString(view, 36, 'data');
-  view.setUint32(40, length, true);
+  writeString(36, "data");
+  view.setUint32(40, dataSize, true);
 
-  let offset = 44;
-  for (let i = 0; i < samples.length; i++, offset += 2) {
-    const s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-  }
-
-  return new Blob([view], { type: 'audio/wav' });
+  return buffer;
 }
 
+function encodeWav(samples, sampleRate) {
+  const header = createWavHeader(sampleRate, 1, samples.length);
+  const buffer = new ArrayBuffer(header.byteLength + samples.length * 2);
+  const view = new DataView(buffer);
+
+  new Uint8Array(buffer).set(new Uint8Array(header), 0);
+
+  let offset = header.byteLength;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    let s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+
+  return new Uint8Array(buffer);
+}
+
+/* ---------- Recorder Factory ---------- */
+async function recordStream(stream, chunksArr) {
+  const ctx = new AudioContext();
+  const source = ctx.createMediaStreamSource(stream);
+  const processor = ctx.createScriptProcessor(4096, 1, 1);
+
+  let samples = [];
+  processor.onaudioprocess = (e) => {
+    samples.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  };
+
+  source.connect(processor);
+  processor.connect(ctx.destination);
+
+  return {
+    stop: async () => {
+      processor.disconnect();
+      source.disconnect();
+      await ctx.close();
+
+      // Flatten samples
+      const flat = new Float32Array(samples.reduce((a, b) => a + b.length, 0));
+      let offset = 0;
+      for (let arr of samples) {
+        flat.set(arr, offset);
+        offset += arr.length;
+      }
+
+      const wavData = encodeWav(flat, 44100);
+      chunksArr.push(wavData);
+    }
+  };
+}
+
+/* ---------- Main Flow ---------- */
 async function startRecording() {
   statusEl.textContent = 'Status: requesting media permissions...';
-  recordedSamples = [];
+  micChunks = [];
+  sysChunks = [];
+  micRecorder = null;
+  sysRecorder = null;
 
   try {
-    micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    audioCtx = new AudioContext({ sampleRate: recordingSampleRate });
+    const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    micRecorder = await recordStream(micStream, micChunks);
 
-    const source = audioCtx.createMediaStreamSource(micStream);
-
-    // ScriptProcessorNode is deprecated but works in Electron
-    processor = audioCtx.createScriptProcessor(4096, 1, 1);
-    source.connect(processor);
-    processor.connect(audioCtx.destination);
-
-    processor.onaudioprocess = (e) => {
-      const channelData = e.inputBuffer.getChannelData(0);
-      recordedSamples.push(new Float32Array(channelData));
-    };
+    let sysStream = null;
+    try {
+      sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: false });
+      sysRecorder = await recordStream(sysStream, sysChunks);
+    } catch (e) {
+      console.warn('System audio capture denied/unavailable:', e);
+    }
 
     startBtn.disabled = true;
     stopBtn.disabled = false;
-    statusEl.textContent = 'Status: recording...';
+    statusEl.textContent = 'Status: recording (mic + system if available)...';
   } catch (err) {
     console.error(err);
     statusEl.textContent = 'Status: error obtaining audio: ' + err.message;
@@ -78,47 +119,50 @@ async function startRecording() {
 }
 
 async function stopRecording() {
-  if (processor) {
-    processor.disconnect();
-    processor.onaudioprocess = null;
+  statusEl.textContent = 'Status: stopping recorders...';
+
+  if (micRecorder) await micRecorder.stop();
+  if (sysRecorder) await sysRecorder.stop();
+
+  const micFile = micChunks.length > 0 ? new Blob(micChunks, { type: 'audio/wav' }) : null;
+  const sysFile = sysChunks.length > 0 ? new Blob(sysChunks, { type: 'audio/wav' }) : null;
+
+  const micPath = micFile ? `mic-${Date.now()}.wav` : null;
+  const sysPath = sysFile ? `system-${Date.now()}.wav` : null;
+
+  if (micFile) {
+    const buf = new Uint8Array(await micFile.arrayBuffer());
+    await window.electronAPI.saveRecording({ filename: micPath, data: buf });
   }
-  if (audioCtx) {
-    await audioCtx.close();
-  }
-  if (micStream) {
-    micStream.getTracks().forEach(track => track.stop());
+  if (sysFile) {
+    const buf = new Uint8Array(await sysFile.arrayBuffer());
+    await window.electronAPI.saveRecording({ filename: sysPath, data: buf });
   }
 
-  // Merge recorded chunks into one Float32Array
-  let length = recordedSamples.reduce((acc, cur) => acc + cur.length, 0);
-  let merged = new Float32Array(length);
-  let offset = 0;
-  for (const chunk of recordedSamples) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
+  transcriptEl.textContent = "Transcribing...";
+  statusEl.textContent = 'Status: sending to Whisper...';
+
+  const resp = await window.electronAPI.transcribeBoth({ micPath, sysPath });
+  if (resp.ok) {
+    let text = '';
+    if (resp.mic && resp.mic.length > 0) {
+      resp.mic.forEach(seg => {
+        text += `[${seg[0]} - ${seg[1]}] You: ${seg[2]}\n`;
+      });
+    }
+    if (resp.sys && resp.sys.length > 0) {
+      resp.sys.forEach(seg => {
+        text += `[${seg[0]} - ${seg[1]}] Other participant: ${seg[2]}\n`;
+      });
+    }
+    transcriptEl.textContent = text || "No speech detected.";
+  } else {
+    transcriptEl.textContent = "Error: " + resp.error;
   }
 
-  // Encode to WAV
-  const wavBlob = encodeWAV(merged, recordingSampleRate);
-  const arrayBuffer = await wavBlob.arrayBuffer();
-  const buffer = new Uint8Array(arrayBuffer);
-
-  const filename = `recording-${Date.now()}.wav`;
-
-  // Send to main process for Whisper transcription
-  const resp = await window.electronAPI.startTranscription({ filename, data: buffer });
-if (resp.ok) {
-  transcriptEl.textContent = resp.segments
-    .map(seg => `[${seg.start} - ${seg.end}] ${seg.text}`)
-    .join('\n');
-  saveBtn.disabled = false;
-  statusEl.textContent = 'Status: transcription complete';
-} else {
-  transcriptEl.textContent = 'Transcription error: ' + resp.error;
-  statusEl.textContent = 'Status: failed transcription';
-}
   startBtn.disabled = false;
   stopBtn.disabled = true;
+  saveBtn.disabled = false;
 }
 
 async function saveTranscript() {
@@ -132,6 +176,7 @@ async function saveTranscript() {
   }
 }
 
+/* ---------- Event bindings ---------- */
 startBtn.addEventListener('click', startRecording);
 stopBtn.addEventListener('click', stopRecording);
 saveBtn.addEventListener('click', saveTranscript);
