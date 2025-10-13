@@ -4,10 +4,21 @@ const saveBtn = document.getElementById('saveBtn');
 const statusEl = document.getElementById('status');
 const transcriptEl = document.getElementById('transcript');
 
-let micRecorder, sysRecorder;
-let micChunks = [], sysChunks = [];
+let micRecorder;
+let micChunks = [];
+let sysPath = null;
 
 /* ---------- WAV Helpers ---------- */
+function parseTimestampToMs(timestamp) {
+  const parts = timestamp.split(':');
+  const secondsParts = parts[2].split('.');
+  const hours = parseInt(parts[0], 10);
+  const minutes = parseInt(parts[1], 10);
+  const seconds = parseInt(secondsParts[0], 10);
+  const ms = parseInt(secondsParts[1], 10);
+  return (hours * 3600 + minutes * 60 + seconds) * 1000 + ms;
+}
+
 function createWavHeader(sampleRate, numChannels, numFrames) {
   const buffer = new ArrayBuffer(44);
   const view = new DataView(buffer);
@@ -93,31 +104,32 @@ async function recordStream(stream, chunksArr) {
 async function startRecording() {
   statusEl.textContent = 'Status: requesting media permissions...';
   micChunks = [];
-  sysChunks = [];
   micRecorder = null;
-  sysRecorder = null;
+  sysPath = `system-${Date.now()}.wav`; // Set the path here
 
   try {
     // microphone
     const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     micRecorder = await recordStream(micStream, micChunks);
 
-    // system audio (requires video:true in Chromium/Electron)
-    try {
-      const sysStream = await navigator.mediaDevices.getDisplayMedia({ audio: true, video: true });
-      // discard video tracks immediately
-      sysStream.getVideoTracks().forEach(track => track.stop());
-      sysRecorder = await recordStream(sysStream, sysChunks);
-    } catch (e) {
-      console.warn('System audio capture denied/unavailable:', e);
+    // Add a small delay to allow the audio system to stabilize after mic activation
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // system audio
+    console.log('Attempting to start system audio recording...');
+    const result = await window.electronAPI.startSysAudio({ filename: sysPath });
+    console.log('System audio result:', result);
+    if (!result.ok) {
+      throw new Error(result.error);
     }
 
     startBtn.disabled = true;
     stopBtn.disabled = false;
-    statusEl.textContent = 'Status: recording (mic + system if available)...';
+    statusEl.textContent = 'Status: recording (mic + system)...';
   } catch (err) {
-    console.error(err);
+    console.error('Recording setup failed:', err);
     statusEl.textContent = 'Status: error obtaining audio: ' + err.message;
+    sysPath = null; // Reset path on error
   }
 }
 
@@ -125,39 +137,49 @@ async function stopRecording() {
   statusEl.textContent = 'Status: stopping recorders...';
 
   if (micRecorder) await micRecorder.stop();
-  if (sysRecorder) await sysRecorder.stop();
+  await window.electronAPI.stopSysAudio();
 
   const micFile = micChunks.length > 0 ? new Blob(micChunks, { type: 'audio/wav' }) : null;
-  const sysFile = sysChunks.length > 0 ? new Blob(sysChunks, { type: 'audio/wav' }) : null;
-
   const micPath = micFile ? `mic-${Date.now()}.wav` : null;
-  const sysPath = sysFile ? `system-${Date.now()}.wav` : null;
 
   if (micFile) {
     const buf = new Uint8Array(await micFile.arrayBuffer());
     await window.electronAPI.saveRecording({ filename: micPath, data: buf });
   }
-  if (sysFile) {
-    const buf = new Uint8Array(await sysFile.arrayBuffer());
-    await window.electronAPI.saveRecording({ filename: sysPath, data: buf });
-  }
 
   transcriptEl.textContent = "Transcribing...";
   statusEl.textContent = 'Status: sending to Whisper...';
 
+  // Use the sysPath that was set when the recording started
   const resp = await window.electronAPI.transcribeBoth({ micPath, sysPath });
   if (resp.ok) {
-    let text = '';
+    const combined = [];
     if (resp.mic && resp.mic.length > 0) {
       resp.mic.forEach(seg => {
-        text += `[${seg[0]} - ${seg[1]}] You: ${seg[2]}\n`;
+        combined.push({ 
+          startMs: parseTimestampToMs(seg[0]),
+          startStr: seg[0],
+          endStr: seg[1],
+          text: seg[2], 
+          speaker: 'You' 
+        });
       });
     }
     if (resp.sys && resp.sys.length > 0) {
       resp.sys.forEach(seg => {
-        text += `[${seg[0]} - ${seg[1]}] Other participant: ${seg[2]}\n`;
+        combined.push({ 
+          startMs: parseTimestampToMs(seg[0]),
+          startStr: seg[0],
+          endStr: seg[1],
+          text: seg[2], 
+          speaker: 'Other' 
+        });
       });
     }
+
+    combined.sort((a, b) => a.startMs - b.startMs);
+
+    let text = combined.map(seg => `[${seg.startStr} - ${seg.endStr}] ${seg.speaker}: ${seg.text}`).join('\n');
     transcriptEl.textContent = text || "No speech detected.";
   } else {
     transcriptEl.textContent = "Error: " + resp.error;
@@ -166,6 +188,7 @@ async function stopRecording() {
   startBtn.disabled = false;
   stopBtn.disabled = true;
   saveBtn.disabled = false;
+  sysPath = null; // Reset for next recording
 }
 
 async function saveTranscript() {

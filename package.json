@@ -4,7 +4,7 @@
   "description": "Starter Electron app for Notula-AI (microphone + system audio capture). Add whisper-node-addon / whisper.cpp integration as described in README.",
   "main": "main.js",
   "scripts": {
-    "start": "electron --no-sandbox .",
+    "start": "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/legion/project91/notula-ai/node_modules/@kutalia/whisper-node-addon/dist/linux-x64 && electron --no-sandbox .",
     "rebuild": "electron-rebuild -f -w @kutalia/whisper-node-addon || true"
   },
   "author": "",

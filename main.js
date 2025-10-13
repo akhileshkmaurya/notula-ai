@@ -1,9 +1,11 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { spawn, exec } = require('child_process');
 
 let whisper = null;
 const USE_WHISPER = true;
+let sysAudioProcess = null;
 
 if (USE_WHISPER) {
   try {
@@ -87,6 +89,102 @@ ipcMain.handle('transcribe-both', async (event, { micPath, sysPath }) => {
     return { ok: true, mic: micResult, sys: sysResult };
   } catch (err) {
     console.error('Transcription error:', err);
+    return { ok: false, error: String(err) };
+  }
+});
+
+async function getSystemAudioDevice() {
+  return new Promise((resolve, reject) => {
+    exec('pactl get-default-sink', (error, stdout, stderr) => {
+      if (error) {
+        return reject(`Failed to get default sink: ${stderr}`);
+      }
+      const defaultSink = stdout.trim();
+
+      exec('pactl list sources', (error, stdout, stderr) => {
+        if (error) {
+          return reject(`Failed to list sources: ${stderr}`);
+        }
+
+        let currentSource = {};
+        const sources = [];
+
+        stdout.split('\n').forEach(line => {
+          if (line.startsWith('Source #')) {
+            if (Object.keys(currentSource).length > 0) {
+              sources.push(currentSource);
+            }
+            currentSource = {};
+          } else {
+            const [key, ...value] = line.split(':');
+            if (key && value.length > 0) {
+              currentSource[key.trim()] = value.join(':').trim();
+            }
+          }
+        });
+        if (Object.keys(currentSource).length > 0) {
+          sources.push(currentSource);
+        }
+
+        for (const source of sources) {
+          if (source['Monitor of Sink'] === defaultSink) {
+            return resolve(source['Name']);
+          }
+        }
+
+        reject('Could not find a monitor source for the default sink.');
+      });
+    });
+  });
+}
+
+ipcMain.handle('start-sys-audio', async (event, { filename }) => {
+  console.log('IPC_MAIN: start-sys-audio received');
+  try {
+    const recordingsDir = path.join(app.getPath('documents'), 'notula-ai-recordings');
+    if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
+    const outPath = path.join(recordingsDir, filename);
+
+    console.log('Detecting default system audio device...');
+    const device = await getSystemAudioDevice();
+    console.log(`Found device: ${device}. Starting ffmpeg, outputting to: ${outPath}`);
+
+    sysAudioProcess = spawn('ffmpeg', [
+        '-f', 'pulse',
+        '-i', device,
+        '-acodec', 'pcm_s16le',
+        '-ar', '44100',
+        '-ac', '1',
+        outPath
+    ]);
+
+    sysAudioProcess.stdout.on('data', (data) => {
+      console.log(`ffmpeg stdout: ${data}`);
+    });
+
+    sysAudioProcess.stderr.on('data', (data) => {
+      console.error(`ffmpeg stderr: ${data}`);
+    });
+
+    sysAudioProcess.on('close', (code) => {
+      console.log(`ffmpeg process exited with code ${code}`);
+    });
+
+    return { ok: true, path: outPath };
+  } catch (err) {
+    console.error('Error starting sys audio:', err);
+    return { ok: false, error: String(err) };
+  }
+});
+
+ipcMain.handle('stop-sys-audio', async (event) => {
+  try {
+    if (sysAudioProcess) {
+      sysAudioProcess.kill('SIGINT');
+      sysAudioProcess = null;
+    }
+    return { ok: true };
+  } catch (err) {
     return { ok: false, error: String(err) };
   }
 });
