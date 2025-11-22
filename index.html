@@ -14,6 +14,13 @@
 <body>
   <h1>Notula-AI — Starter</h1>
   <div id="controls">
+    <div style="margin-bottom: 10px;">
+      <label for="sourceSelect">Audio Source: </label>
+      <select id="sourceSelect">
+        <option value="default">System Audio (Default)</option>
+      </select>
+      <button id="refreshSourcesBtn">Refresh Sources</button>
+    </div>
     <button id="startBtn">Start Recording</button>
     <button id="stopBtn" disabled>Stop Recording</button>
     <button id="saveBtn" disabled>Save Transcript</button>

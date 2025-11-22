@@ -3,9 +3,9 @@ const stopBtn = document.getElementById('stopBtn');
 const saveBtn = document.getElementById('saveBtn');
 const statusEl = document.getElementById('status');
 const transcriptEl = document.getElementById('transcript');
+const sourceSelect = document.getElementById('sourceSelect');
+const refreshSourcesBtn = document.getElementById('refreshSourcesBtn');
 
-let micRecorder;
-let micChunks = [];
 let sysPath = null;
 
 function groupSegmentsToSentences(segments) {
@@ -18,11 +18,10 @@ function groupSegmentsToSentences(segments) {
     const currentSegment = segments[i];
     const trimmedText = currentSegment.text.trim();
 
-    if (currentSentence.speaker !== currentSegment.speaker) {
-      sentences.push(currentSentence);
-      currentSentence = { ...currentSegment, text: trimmedText };
-      continue;
-    }
+    // Since we don't have speakers anymore, we just group by time or just append?
+    // For now, let's keep the logic but assume speaker is always undefined or same.
+    // Actually, Whisper might not return speaker labels in this mode easily without diarization.
+    // So we just append text.
 
     currentSentence.text += ` ${trimmedText}`;
     currentSentence.endStr = currentSegment.endStr;
@@ -31,7 +30,7 @@ function groupSegmentsToSentences(segments) {
       sentences.push(currentSentence);
       if (i + 1 < segments.length) {
         currentSentence = { ...segments[i + 1], text: segments[i + 1].text.trim() };
-        i++; // Skip the next segment as it's the start of a new sentence
+        i++;
       }
     }
   }
@@ -40,7 +39,6 @@ function groupSegmentsToSentences(segments) {
   return sentences;
 }
 
-/* ---------- WAV Helpers ---------- */
 function parseTimestampToMs(timestamp) {
   const parts = timestamp.split(':');
   const secondsParts = parts[2].split('.');
@@ -51,105 +49,39 @@ function parseTimestampToMs(timestamp) {
   return (hours * 3600 + minutes * 60 + seconds) * 1000 + ms;
 }
 
-function createWavHeader(sampleRate, numChannels, numFrames) {
-  const buffer = new ArrayBuffer(44);
-  const view = new DataView(buffer);
-
-  function writeString(offset, str) {
-    for (let i = 0; i < str.length; i++) {
-      view.setUint8(offset + i, str.charCodeAt(i));
-    }
-  }
-
-  let blockAlign = numChannels * 2;
-  let byteRate = sampleRate * blockAlign;
-  let dataSize = numFrames * blockAlign;
-
-  writeString(0, "RIFF");
-  view.setUint32(4, 36 + dataSize, true);
-  writeString(8, "WAVE");
-  writeString(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, 16, true); // bits per sample
-  writeString(36, "data");
-  view.setUint32(40, dataSize, true);
-
-  return buffer;
-}
-
-function encodeWav(samples, sampleRate) {
-  const header = createWavHeader(sampleRate, 1, samples.length);
-  const buffer = new ArrayBuffer(header.byteLength + samples.length * 2);
-  const view = new DataView(buffer);
-
-  new Uint8Array(buffer).set(new Uint8Array(header), 0);
-
-  let offset = header.byteLength;
-  for (let i = 0; i < samples.length; i++, offset += 2) {
-    let s = Math.max(-1, Math.min(1, samples[i]));
-    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-  }
-
-  return new Uint8Array(buffer);
-}
-
-/* ---------- Recorder Factory ---------- */
-async function recordStream(stream, chunksArr) {
-  const ctx = new AudioContext();
-  const source = ctx.createMediaStreamSource(stream);
-  const processor = ctx.createScriptProcessor(4096, 1, 1);
-
-  let samples = [];
-  processor.onaudioprocess = (e) => {
-    samples.push(new Float32Array(e.inputBuffer.getChannelData(0)));
-  };
-
-  source.connect(processor);
-  processor.connect(ctx.destination);
-
-  return {
-    stop: async () => {
-      processor.disconnect();
-      source.disconnect();
-      await ctx.close();
-
-      // Flatten samples
-      const flat = new Float32Array(samples.reduce((a, b) => a + b.length, 0));
-      let offset = 0;
-      for (let arr of samples) {
-        flat.set(arr, offset);
-        offset += arr.length;
-      }
-
-      const wavData = encodeWav(flat, 44100);
-      chunksArr.push(wavData);
-    }
-  };
-}
-
 /* ---------- Main Flow ---------- */
+
+async function refreshSources() {
+  const sources = await window.electronAPI.getSources();
+  const currentSelection = sourceSelect.value;
+
+  // Clear existing options except default
+  sourceSelect.innerHTML = '<option value="default">System Audio (Default)</option>';
+
+  sources.forEach(source => {
+    const option = document.createElement('option');
+    option.value = source.id;
+    option.textContent = source.name;
+    sourceSelect.appendChild(option);
+  });
+
+  // Restore selection if it still exists
+  if (Array.from(sourceSelect.options).some(opt => opt.value === currentSelection)) {
+    sourceSelect.value = currentSelection;
+  }
+}
+
 async function startRecording() {
-  statusEl.textContent = 'Status: requesting media permissions...';
-  micChunks = [];
-  micRecorder = null;
-  sysPath = `system-${Date.now()}.wav`; // Set the path here
+  statusEl.textContent = 'Status: starting recording...';
+  sysPath = `recording-${Date.now()}.wav`;
+
+  const sourceId = sourceSelect.value;
 
   try {
-    // microphone
-    const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    micRecorder = await recordStream(micStream, micChunks);
+    // We no longer record mic in browser. Main process handles mixing.
 
-    // Add a small delay to allow the audio system to stabilize after mic activation
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    // system audio
-    console.log('Attempting to start system audio recording...');
-    const result = await window.electronAPI.startSysAudio({ filename: sysPath });
+    console.log(`Attempting to start audio recording (Source: ${sourceId})...`);
+    const result = await window.electronAPI.startSysAudio({ filename: sysPath, sourceId });
     console.log('System audio result:', result);
     if (!result.ok) {
       throw new Error(result.error);
@@ -157,72 +89,49 @@ async function startRecording() {
 
     startBtn.disabled = true;
     stopBtn.disabled = false;
-    statusEl.textContent = 'Status: recording (mic + system)...';
+    refreshSourcesBtn.disabled = true;
+    sourceSelect.disabled = true;
+    statusEl.textContent = 'Status: recording (Mixed Audio)...';
   } catch (err) {
     console.error('Recording setup failed:', err);
-    statusEl.textContent = 'Status: error obtaining audio: ' + err.message;
-    sysPath = null; // Reset path on error
+    statusEl.textContent = 'Status: error starting recording: ' + err.message;
+    sysPath = null;
   }
 }
 
 async function stopRecording() {
-  statusEl.textContent = 'Status: stopping recorders...';
+  statusEl.textContent = 'Status: stopping recorder...';
 
-  if (micRecorder) await micRecorder.stop();
   await window.electronAPI.stopSysAudio();
-
-  const micFile = micChunks.length > 0 ? new Blob(micChunks, { type: 'audio/wav' }) : null;
-  const micPath = micFile ? `mic-${Date.now()}.wav` : null;
-
-  if (micFile) {
-    const buf = new Uint8Array(await micFile.arrayBuffer());
-    await window.electronAPI.saveRecording({ filename: micPath, data: buf });
-  }
 
   transcriptEl.textContent = "Transcribing...";
   statusEl.textContent = 'Status: sending to Whisper...';
 
-  // Use the sysPath that was set when the recording started
-  const resp = await window.electronAPI.transcribeBoth({ micPath, sysPath });
-  if (resp.ok) {
-    const combined = [];
-    if (resp.mic && resp.mic.length > 0) {
-      resp.mic.forEach(seg => {
-        combined.push({ 
-          startMs: parseTimestampToMs(seg[0]),
-          startStr: seg[0],
-          endStr: seg[1],
-          text: seg[2], 
-          speaker: 'You' 
-        });
-      });
-    }
-    if (resp.sys && resp.sys.length > 0) {
-      resp.sys.forEach(seg => {
-        combined.push({ 
-          startMs: parseTimestampToMs(seg[0]),
-          startStr: seg[0],
-          endStr: seg[1],
-          text: seg[2], 
-          speaker: 'Other' 
-        });
-      });
-    }
+  const resp = await window.electronAPI.transcribeBoth({ sysPath });
+  if (resp.ok && resp.result) {
+    const segments = resp.result.map(seg => ({
+      startMs: parseTimestampToMs(seg[0]),
+      startStr: seg[0],
+      endStr: seg[1],
+      text: seg[2]
+    }));
 
-    combined.sort((a, b) => a.startMs - b.startMs);
+    // segments.sort((a, b) => a.startMs - b.startMs); // Already sorted usually
 
-    const sentences = groupSegmentsToSentences(combined);
+    const sentences = groupSegmentsToSentences(segments);
 
-    let text = sentences.map(seg => `[${seg.startStr} - ${seg.endStr}] ${seg.speaker}: ${seg.text}`).join('\n');
+    let text = sentences.map(seg => `[${seg.startStr} - ${seg.endStr}] ${seg.text}`).join('\n');
     transcriptEl.textContent = text || "No speech detected.";
   } else {
-    transcriptEl.textContent = "Error: " + resp.error;
+    transcriptEl.textContent = "Error: " + (resp.error || "No result");
   }
 
   startBtn.disabled = false;
   stopBtn.disabled = true;
   saveBtn.disabled = false;
-  sysPath = null; // Reset for next recording
+  refreshSourcesBtn.disabled = false;
+  sourceSelect.disabled = false;
+  sysPath = null;
 }
 
 async function saveTranscript() {
@@ -240,3 +149,7 @@ async function saveTranscript() {
 startBtn.addEventListener('click', startRecording);
 stopBtn.addEventListener('click', stopRecording);
 saveBtn.addEventListener('click', saveTranscript);
+refreshSourcesBtn.addEventListener('click', refreshSources);
+
+// Initial load
+refreshSources();

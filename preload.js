@@ -6,4 +6,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   transcribeBoth: (data) => ipcRenderer.invoke('transcribe-both', data),
   startSysAudio: (data) => ipcRenderer.invoke('start-sys-audio', data),
   stopSysAudio: () => ipcRenderer.invoke('stop-sys-audio'),
+  getSources: () => ipcRenderer.invoke('get-sources'),
 });

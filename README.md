@@ -13,14 +13,58 @@ You must follow the integration steps below to enable local transcription.
 - System audio capture using `electron-audio-loopback`
 - Saves recorded mixed audio to `recordings/recording.wav`
 - IPC hooks where you can add whisper-node-addon integration in `main.js`
+# Notula-AI Starter
+
+A starter Electron application for recording and transcribing audio.
+
+## Features
+- **[NEW] Mixed Audio Recording**: Records both the selected application audio AND your microphone into a single file.
+- **App Source Selection**: Choose which open application/window to record.
+- Transcribe audio using Whisper (via `@kutalia/whisper-node-addon`)
 
 ## Requirements
+- Linux OS
+- `ffmpeg` installed
+- `pactl` (PulseAudio utils) installed
+- `xprop` installed (for app detection)
 - Node.js 18+ (LTS recommended)
 - npm or yarn
 - Electron 31+ (installed via npm in this project)
 - On macOS: app signing & permissions for microphone/system audio when distributing
 - On Linux: PulseAudio or PipeWire configured for loopback capture
 - For best transcription performance: a machine with GPU support (optional) and at least 8GB RAM.
+
+## Setup
+1. Install dependencies:
+   ```bash
+   npm install
+   ```
+2. Download the Whisper model:
+   - Create a `models` directory.
+   - Download `ggml-base.en.bin` (or other model) into `models/`.
+
+## Running
+```bash
+npm start
+```
+
+## Usage
+1. Select the audio source from the dropdown (System Default or specific app).
+2. Click **Start Recording**.
+3. Speak and/or play audio from the selected app.
+4. Click **Stop Recording**.
+5. Wait for transcription.
+
+## Troubleshooting
+- If app recording is silent, ensure the target app is actually playing audio *when* you start recording (or refresh sources).
+- Ensure `pactl` and `xprop` are available in your path.
+
+## What's included
+- Minimal Electron app (main.js, preload.js, renderer.js, index.html)
+- Start/Stop recording UI
+- System audio capture using `electron-audio-loopback`
+- Saves recorded mixed audio to `recordings/recording.wav`
+- IPC hooks where you can add whisper-node-addon integration in `main.js`
 
 ## Quick run (development)
 1. Unzip the project and `cd` into it.
