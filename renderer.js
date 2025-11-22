@@ -8,6 +8,38 @@ let micRecorder;
 let micChunks = [];
 let sysPath = null;
 
+function groupSegmentsToSentences(segments) {
+  if (!segments.length) return [];
+
+  const sentences = [];
+  let currentSentence = { ...segments[0], text: segments[0].text.trim() };
+
+  for (let i = 1; i < segments.length; i++) {
+    const currentSegment = segments[i];
+    const trimmedText = currentSegment.text.trim();
+
+    if (currentSentence.speaker !== currentSegment.speaker) {
+      sentences.push(currentSentence);
+      currentSentence = { ...currentSegment, text: trimmedText };
+      continue;
+    }
+
+    currentSentence.text += ` ${trimmedText}`;
+    currentSentence.endStr = currentSegment.endStr;
+
+    if (trimmedText.match(/[.!?]$/)) {
+      sentences.push(currentSentence);
+      if (i + 1 < segments.length) {
+        currentSentence = { ...segments[i + 1], text: segments[i + 1].text.trim() };
+        i++; // Skip the next segment as it's the start of a new sentence
+      }
+    }
+  }
+  sentences.push(currentSentence);
+
+  return sentences;
+}
+
 /* ---------- WAV Helpers ---------- */
 function parseTimestampToMs(timestamp) {
   const parts = timestamp.split(':');
@@ -179,7 +211,9 @@ async function stopRecording() {
 
     combined.sort((a, b) => a.startMs - b.startMs);
 
-    let text = combined.map(seg => `[${seg.startStr} - ${seg.endStr}] ${seg.speaker}: ${seg.text}`).join('\n');
+    const sentences = groupSegmentsToSentences(combined);
+
+    let text = sentences.map(seg => `[${seg.startStr} - ${seg.endStr}] ${seg.speaker}: ${seg.text}`).join('\n');
     transcriptEl.textContent = text || "No speech detected.";
   } else {
     transcriptEl.textContent = "Error: " + resp.error;
