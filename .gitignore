@@ -1,4 +1,8 @@
-node_modules/
-
-models/
+node_modules
+.env
+venv
+__pycache__
+*.wav
+*.pdf
+notula-ai-recordings
 dist/

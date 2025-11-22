@@ -51,9 +51,12 @@ npm start
 ## Configuration
 ### AI Meeting Summary
 To enable the AI summary feature:
-1.  Open `main.js`.
-2.  Find the line `const GEMINI_API_KEY = 'YOUR_API_KEY_HERE';`.
-3.  Replace `'YOUR_API_KEY_HERE'` with your actual **Google AI Studio API Key**.
+1.  Create a file named `.env` in the project root.
+2.  Add your Google AI Studio API Key:
+    ```
+    GEMINI_API_KEY=your_actual_api_key_here
+    ```
+3.  Restart the application.
 
 ## Usage
 1.  **Start the app**: `npm start`

@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain, desktopCapturer, dialog } = require('electr
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
+require('dotenv').config();
 
 let whisper = null;
 const USE_WHISPER = true;
@@ -103,19 +104,17 @@ ipcMain.handle('transcribe-both', async (event, { sysPath }) => {
 // Summarize
 const OpenAI = require('openai');
 
-// TODO: Replace with your actual Google AI Studio API Key
-const GEMINI_API_KEY = 'AIzaSyDzG5xxuanbABpqBosjRoA0M7yzEzPW3ZA';
-
 ipcMain.handle('summarize-meeting', async (event, { transcript }) => {
   try {
     console.log(`Summarizing meeting with Gemini...`);
 
-    if (GEMINI_API_KEY === 'YOUR_API_KEY_HERE') {
-      return { ok: false, error: 'Please set GEMINI_API_KEY in main.js' };
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
+      return { ok: false, error: 'Missing GEMINI_API_KEY in .env file' };
     }
 
     const clientConfig = {
-      apiKey: GEMINI_API_KEY,
+      apiKey: apiKey,
       baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/'
     };
 
