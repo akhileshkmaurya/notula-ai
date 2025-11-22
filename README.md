@@ -18,15 +18,15 @@ You must follow the integration steps below to enable local transcription.
 A starter Electron application for recording and transcribing audio.
 
 ## Features
-- **[NEW] Mixed Audio Recording**: Records both the selected application audio AND your microphone into a single file.
-- **App Source Selection**: Choose which open application/window to record.
+- **Mixed Audio Recording**: Records both system audio and microphone.
+- **Auto-Cleanup**: Automatically deletes recording files after transcription.
+- **AI Meeting Summary**: Generate summaries and action items using OpenAI-compatible APIs (e.g., Gemini, GPT-4).
 - Transcribe audio using Whisper (via `@kutalia/whisper-node-addon`)
 
 ## Requirements
 - Linux OS
 - `ffmpeg` installed
 - `pactl` (PulseAudio utils) installed
-- `xprop` installed (for app detection)
 - Node.js 18+ (LTS recommended)
 - npm or yarn
 - Electron 31+ (installed via npm in this project)
@@ -48,11 +48,18 @@ A starter Electron application for recording and transcribing audio.
 npm start
 ```
 
+## Configuration
+### AI Meeting Summary
+To enable the AI summary feature:
+1.  Open `main.js`.
+2.  Find the line `const GEMINI_API_KEY = 'YOUR_API_KEY_HERE';`.
+3.  Replace `'YOUR_API_KEY_HERE'` with your actual **Google AI Studio API Key**.
+
 ## Usage
-1. Select the audio source from the dropdown (System Default or specific app).
-2. Click **Start Recording**.
-3. Speak and/or play audio from the selected app.
-4. Click **Stop Recording**.
+1.  **Start the app**: `npm start`
+2.  **Record**: Click "Start Recording".
+3.  **Stop**: Click "Stop Recording".
+4.  **Summarize**: Click "Summarize Meeting" (requires API Key configuration).
 5. Wait for transcription.
 
 ## Troubleshooting

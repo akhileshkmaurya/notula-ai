@@ -1,34 +1,46 @@
 <!doctype html>
 <html>
+
 <head>
   <meta charset="utf-8" />
-  <title>Notula-AI Starter</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    #controls { margin-bottom: 12px; }
-    button { margin-right: 8px; padding: 8px 12px; }
-    #transcript { white-space: pre-wrap; border: 1px solid #ddd; padding: 12px; height: 380px; overflow: auto; }
-    .status { margin-top: 8px; color: #666; }
-  </style>
+  <title>Notula AI</title>
+  <link rel="stylesheet" href="index.css">
 </head>
+
 <body>
-  <h1>Notula-AI — Starter</h1>
-  <div id="controls">
-    <div style="margin-bottom: 10px;">
-      <label for="sourceSelect">Audio Source: </label>
-      <select id="sourceSelect">
-        <option value="default">System Audio (Default)</option>
-      </select>
-      <button id="refreshSourcesBtn">Refresh Sources</button>
+  <div class="container">
+    <!-- Header -->
+    <div class="header">
+      <h1>Notula AI</h1>
+      <div id="status" class="status-badge">Ready</div>
     </div>
-    <button id="startBtn">Start Recording</button>
-    <button id="stopBtn" disabled>Stop Recording</button>
-    <button id="saveBtn" disabled>Save Transcript</button>
+
+    <!-- Controls -->
+    <div class="controls">
+      <button id="startBtn" class="primary">Record Meeting</button>
+      <button id="stopBtn" disabled>End Meeting</button>
+      <button id="summarizeBtn" disabled>Generate AI Summary</button>
+      <button id="saveBtn" disabled>Export Transcript</button>
+      <button id="exportPdfBtn" disabled>Export PDF</button>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+      <!-- Transcript Card -->
+      <div class="card">
+        <div class="card-header">Live Transcript</div>
+        <div id="transcript" class="card-body"></div>
+      </div>
+
+      <!-- Summary Card -->
+      <div class="card">
+        <div class="card-header">Meeting Summary & Action Items</div>
+        <div id="summary" class="card-body"></div>
+      </div>
+    </div>
   </div>
-  <div class="status" id="status">Status: idle</div>
-  <h3>Live Transcript</h3>
-  <div id="transcript">(no transcript yet)</div>
 
   <script src="renderer.js"></script>
 </body>
+
 </html>

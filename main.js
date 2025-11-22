@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
@@ -6,7 +6,6 @@ const { spawn, exec } = require('child_process');
 let whisper = null;
 const USE_WHISPER = true;
 let sysAudioProcess = null;
-let pulseModules = []; // Track loaded PulseAudio modules to unload them later
 
 if (USE_WHISPER) {
   try {
@@ -71,20 +70,127 @@ ipcMain.handle('save-recording', async (event, { filename, data }) => {
   }
 });
 
-// Transcribe mixed audio
+// Transcribe
 ipcMain.handle('transcribe-both', async (event, { sysPath }) => {
   try {
-    let result = null;
-    if (USE_WHISPER && whisper) {
-      if (sysPath) {
-        const sysFile = path.join(app.getPath('documents'), 'notula-ai-recordings', sysPath);
-        const resp = await whisper.transcribe({ fname_inp: sysFile, model: 'models/ggml-base.en.bin' });
-        result = resp.transcription || resp.segments || [];
+    let result = [];
+    if (USE_WHISPER && whisper && sysPath) {
+      const sysFile = path.join(app.getPath('documents'), 'notula-ai-recordings', sysPath);
+
+      // 1. Transcribe
+      console.log('Starting transcription...');
+      const resp = await whisper.transcribe({ fname_inp: sysFile, model: 'models/ggml-base.en.bin' });
+      result = resp.transcription || resp.segments || [];
+      console.log(`Transcription done. ${result.length} segments.`);
+
+      // 2. Cleanup Audio File
+      try {
+        if (fs.existsSync(sysFile)) {
+          fs.unlinkSync(sysFile);
+          console.log(`Deleted audio file: ${sysFile}`);
+        }
+      } catch (e) {
+        console.error(`Failed to delete audio file: ${sysFile}`, e);
       }
     }
     return { ok: true, result };
   } catch (err) {
     console.error('Transcription error:', err);
+    return { ok: false, error: String(err) };
+  }
+});
+
+// Summarize
+const OpenAI = require('openai');
+
+// TODO: Replace with your actual Google AI Studio API Key
+const GEMINI_API_KEY = 'AIzaSyDzG5xxuanbABpqBosjRoA0M7yzEzPW3ZA';
+
+ipcMain.handle('summarize-meeting', async (event, { transcript }) => {
+  try {
+    console.log(`Summarizing meeting with Gemini...`);
+
+    if (GEMINI_API_KEY === 'YOUR_API_KEY_HERE') {
+      return { ok: false, error: 'Please set GEMINI_API_KEY in main.js' };
+    }
+
+    const clientConfig = {
+      apiKey: GEMINI_API_KEY,
+      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/'
+    };
+
+    const openai = new OpenAI(clientConfig);
+
+    const prompt = `
+You are an expert minute-taker. 
+Please analyze the following meeting transcript and provide a structured summary.
+Use EXACTLY these section headers (Markdown H2):
+## Executive Summary
+## Action Items
+## Decisions
+
+For Action Items, use bullet points.
+For Decisions, use bullet points.
+
+Transcript:
+${transcript}
+    `.trim();
+
+    const completion = await openai.chat.completions.create({
+      messages: [{ role: 'user', content: prompt }],
+      model: 'gemini-flash-latest',
+    });
+
+    const summary = completion.choices[0].message.content;
+    return { ok: true, summary };
+  } catch (err) {
+    console.error('Summarization error:', err);
+    return { ok: false, error: String(err) };
+  }
+});
+
+// Export PDF
+ipcMain.handle('save-summary-pdf', async (event, { htmlContent }) => {
+  try {
+    const { filePath } = await dialog.showSaveDialog({
+      buttonLabel: 'Save PDF',
+      defaultPath: `meeting-summary-${Date.now()}.pdf`,
+      filters: [{ name: 'PDF Files', extensions: ['pdf'] }]
+    });
+
+    if (filePath) {
+      const win = new BrowserWindow({ show: false });
+
+      // Create a simple HTML template for the PDF
+      const pdfHtml = `
+        <html>
+          <head>
+            <style>
+              body { font-family: Arial, sans-serif; padding: 40px; }
+              h1 { color: #2563eb; border-bottom: 1px solid #ccc; padding-bottom: 10px; }
+              h2 { color: #1e293b; margin-top: 20px; border-left: 4px solid #2563eb; padding-left: 10px; }
+              ul { line-height: 1.6; }
+              li { margin-bottom: 8px; }
+            </style>
+          </head>
+          <body>
+            <h1>Meeting Summary</h1>
+            ${htmlContent}
+          </body>
+        </html>
+      `;
+
+      await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(pdfHtml));
+
+      const pdfData = await win.webContents.printToPDF({});
+      fs.writeFileSync(filePath, pdfData);
+      win.close();
+
+      return { ok: true, path: filePath };
+    }
+    return { ok: false, error: 'Cancelled' };
+  } catch (err) {
+    console.error('PDF Export error:', err);
     return { ok: false, error: String(err) };
   }
 });
@@ -100,50 +206,6 @@ function execPromise(command) {
   });
 }
 
-async function getPidFromWindowId(windowId) {
-  try {
-    const parts = windowId.split(':');
-    if (parts.length < 2) return null;
-    const xid = parts[1];
-    const output = await execPromise(`xprop -id ${xid} _NET_WM_PID`);
-    const match = output.match(/=\s*(\d+)/);
-    return match ? match[1] : null;
-  } catch (e) {
-    console.error('Error getting PID from window ID:', e);
-    return null;
-  }
-}
-
-async function getSinkInputsForPid(pid) {
-  try {
-    const stdout = await execPromise('pactl list sink-inputs');
-    const inputs = [];
-    let currentInput = null;
-
-    stdout.split('\n').forEach(line => {
-      const match = line.match(/^Sink Input #(\d+)/);
-      if (match) {
-        if (currentInput && currentInput.pid === pid) {
-          inputs.push(currentInput.id);
-        }
-        currentInput = { id: match[1], pid: null };
-      } else if (currentInput) {
-        const pidMatch = line.match(/application\.process\.id = "(\d+)"/);
-        if (pidMatch) {
-          currentInput.pid = pidMatch[1];
-        }
-      }
-    });
-    if (currentInput && currentInput.pid === pid) {
-      inputs.push(currentInput.id);
-    }
-    return inputs;
-  } catch (e) {
-    console.error('Error listing sink inputs:', e);
-    return [];
-  }
-}
-
 async function getDefaultSource() {
   try {
     return await execPromise('pactl get-default-source');
@@ -151,84 +213,6 @@ async function getDefaultSource() {
     console.error('Error getting default source:', e);
     return null;
   }
-}
-
-async function setupAppRecording(pid, outPath) {
-  try {
-    // 1. Create Null Sink
-    const nullSinkId = await execPromise('pactl load-module module-null-sink sink_name=NotulaRecorder sink_properties=device.description="Notula_Recorder"');
-    pulseModules.push(nullSinkId);
-    console.log(`Created Null Sink: ${nullSinkId}`);
-
-    // 2. Create Loopback (Null -> Default) so user can still hear audio
-    const defaultSink = await execPromise('pactl get-default-sink');
-    const loopbackId = await execPromise(`pactl load-module module-loopback source=NotulaRecorder.monitor sink=${defaultSink}`);
-    pulseModules.push(loopbackId);
-    console.log(`Created Loopback: ${loopbackId}`);
-
-    // 3. Move App Streams to Null Sink
-    const inputs = await getSinkInputsForPid(pid);
-    if (inputs.length === 0) {
-      console.warn(`No active audio streams found for PID ${pid}. Audio might not be recorded until the app plays sound.`);
-    }
-    for (const inputId of inputs) {
-      await execPromise(`pactl move-sink-input ${inputId} NotulaRecorder`);
-      console.log(`Moved sink input ${inputId} to NotulaRecorder`);
-    }
-
-    // 4. Start ffmpeg recording (Mix Mic + App)
-    const appMonitor = 'NotulaRecorder.monitor';
-    const micSource = await getDefaultSource();
-
-    console.log(`Starting ffmpeg. App: ${appMonitor}, Mic: ${micSource}`);
-
-    const args = [
-      '-f', 'pulse', '-i', appMonitor,
-    ];
-
-    if (micSource) {
-      args.push('-f', 'pulse', '-i', micSource);
-      // Boost mic volume (input 1) by 4x (~12dB) before mixing
-      // amix reduces each input by 1/N (so 0.5 here). 
-      // Boosting mic helps if system mic volume is low.
-      args.push('-filter_complex', '[1:a]volume=4.0[mic];[0:a][mic]amix=inputs=2:duration=longest');
-    } else {
-      console.warn('No default mic source found, recording only app audio.');
-      args.push('-ac', '1'); // Ensure mono if no mix
-    }
-
-    args.push(
-      '-acodec', 'pcm_s16le',
-      '-ar', '44100',
-      '-y', // overwrite
-      outPath
-    );
-
-    sysAudioProcess = spawn('ffmpeg', args);
-
-    sysAudioProcess.stdout.on('data', (data) => console.log(`ffmpeg stdout: ${data}`));
-    sysAudioProcess.stderr.on('data', (data) => console.error(`ffmpeg stderr: ${data}`));
-    sysAudioProcess.on('close', (code) => console.log(`ffmpeg process exited with code ${code}`));
-
-    return { ok: true, path: outPath };
-
-  } catch (err) {
-    console.error('Error setting up app recording:', err);
-    await cleanupPulseModules();
-    return { ok: false, error: String(err) };
-  }
-}
-
-async function cleanupPulseModules() {
-  for (const modId of pulseModules) {
-    try {
-      await execPromise(`pactl unload-module ${modId}`);
-      console.log(`Unloaded module ${modId}`);
-    } catch (e) {
-      console.error(`Failed to unload module ${modId}:`, e);
-    }
-  }
-  pulseModules = [];
 }
 
 async function getSystemAudioDevice() {
@@ -266,68 +250,47 @@ async function getSystemAudioDevice() {
 
 // --- IPC Handlers ---
 
-ipcMain.handle('get-sources', async () => {
-  try {
-    const sources = await desktopCapturer.getSources({ types: ['window', 'screen'] });
-    return sources.map(s => ({
-      id: s.id,
-      name: s.name,
-      thumbnail: s.thumbnail.toDataURL()
-    }));
-  } catch (e) {
-    console.error('Error getting sources:', e);
-    return [];
-  }
-});
-
-ipcMain.handle('start-sys-audio', async (event, { filename, sourceId }) => {
-  console.log(`IPC_MAIN: start-sys-audio received. Source: ${sourceId || 'System Default'}`);
+ipcMain.handle('start-sys-audio', async (event, { filename }) => {
+  console.log(`IPC_MAIN: start-sys-audio received.`);
   try {
     const recordingsDir = path.join(app.getPath('documents'), 'notula-ai-recordings');
     if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
     const outPath = path.join(recordingsDir, filename);
 
-    if (sourceId && sourceId !== 'default') {
-      // App-specific recording
-      const pid = await getPidFromWindowId(sourceId);
-      if (!pid) {
-        throw new Error(`Could not find PID for window ID: ${sourceId}`);
-      }
-      console.log(`Mapped source ${sourceId} to PID ${pid}`);
-      return await setupAppRecording(pid, outPath);
+    // Global system recording (legacy/default/fallback)
+    console.log('Detecting default system audio device...');
+    const device = await getSystemAudioDevice();
+    const micSource = await getDefaultSource();
+    console.log(`Found device: ${device}, Mic: ${micSource}. Starting ffmpeg...`);
+
+    const args = [
+      '-f', 'pulse', '-i', device,
+    ];
+
+    if (micSource) {
+      args.push('-f', 'pulse', '-i', micSource);
+      // Stereo: Left=System, Right=Mic
+      args.push('-filter_complex', '[1:a]volume=4.0[mic];[0:a][mic]join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR[a]');
+      args.push('-map', '[a]');
     } else {
-      // Global system recording (legacy/default)
-      console.log('Detecting default system audio device...');
-      const device = await getSystemAudioDevice();
-      const micSource = await getDefaultSource();
-      console.log(`Found device: ${device}, Mic: ${micSource}. Starting ffmpeg...`);
-
-      const args = [
-        '-f', 'pulse', '-i', device,
-      ];
-
-      if (micSource) {
-        args.push('-f', 'pulse', '-i', micSource);
-        args.push('-filter_complex', '[1:a]volume=4.0[mic];[0:a][mic]amix=inputs=2:duration=longest');
-      } else {
-        args.push('-ac', '1');
-      }
-
-      args.push(
-        '-acodec', 'pcm_s16le',
-        '-ar', '44100',
-        '-y',
-        outPath
-      );
-
-      sysAudioProcess = spawn('ffmpeg', args);
-
-      sysAudioProcess.stdout.on('data', (data) => console.log(`ffmpeg stdout: ${data}`));
-      sysAudioProcess.stderr.on('data', (data) => console.error(`ffmpeg stderr: ${data}`));
-      sysAudioProcess.on('close', (code) => console.log(`ffmpeg process exited with code ${code}`));
-
-      return { ok: true, path: outPath };
+      args.push('-ac', '1');
     }
+
+    args.push(
+      '-acodec', 'pcm_s16le',
+      '-ar', '44100',
+      '-y',
+      outPath
+    );
+
+    sysAudioProcess = spawn('ffmpeg', args);
+
+    sysAudioProcess.stdout.on('data', (data) => console.log(`ffmpeg stdout: ${data}`));
+    sysAudioProcess.stderr.on('data', (data) => console.error(`ffmpeg stderr: ${data}`));
+    sysAudioProcess.on('close', (code) => console.log(`ffmpeg process exited with code ${code}`));
+
+    return { ok: true, path: outPath };
+
   } catch (err) {
     console.error('Error starting sys audio:', err);
     return { ok: false, error: String(err) };
@@ -340,7 +303,6 @@ ipcMain.handle('stop-sys-audio', async (event) => {
       sysAudioProcess.kill('SIGINT');
       sysAudioProcess = null;
     }
-    await cleanupPulseModules();
     return { ok: true };
   } catch (err) {
     return { ok: false, error: String(err) };

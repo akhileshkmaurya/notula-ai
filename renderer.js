@@ -3,8 +3,6 @@ const stopBtn = document.getElementById('stopBtn');
 const saveBtn = document.getElementById('saveBtn');
 const statusEl = document.getElementById('status');
 const transcriptEl = document.getElementById('transcript');
-const sourceSelect = document.getElementById('sourceSelect');
-const refreshSourcesBtn = document.getElementById('refreshSourcesBtn');
 
 let sysPath = null;
 
@@ -17,11 +15,6 @@ function groupSegmentsToSentences(segments) {
   for (let i = 1; i < segments.length; i++) {
     const currentSegment = segments[i];
     const trimmedText = currentSegment.text.trim();
-
-    // Since we don't have speakers anymore, we just group by time or just append?
-    // For now, let's keep the logic but assume speaker is always undefined or same.
-    // Actually, Whisper might not return speaker labels in this mode easily without diarization.
-    // So we just append text.
 
     currentSentence.text += ` ${trimmedText}`;
     currentSentence.endStr = currentSegment.endStr;
@@ -49,39 +42,21 @@ function parseTimestampToMs(timestamp) {
   return (hours * 3600 + minutes * 60 + seconds) * 1000 + ms;
 }
 
+const summarizeBtn = document.getElementById('summarizeBtn');
+const summaryEl = document.getElementById('summary');
+const exportPdfBtn = document.getElementById('exportPdfBtn');
+
 /* ---------- Main Flow ---------- */
 
-async function refreshSources() {
-  const sources = await window.electronAPI.getSources();
-  const currentSelection = sourceSelect.value;
-
-  // Clear existing options except default
-  sourceSelect.innerHTML = '<option value="default">System Audio (Default)</option>';
-
-  sources.forEach(source => {
-    const option = document.createElement('option');
-    option.value = source.id;
-    option.textContent = source.name;
-    sourceSelect.appendChild(option);
-  });
-
-  // Restore selection if it still exists
-  if (Array.from(sourceSelect.options).some(opt => opt.value === currentSelection)) {
-    sourceSelect.value = currentSelection;
-  }
-}
-
 async function startRecording() {
-  statusEl.textContent = 'Status: starting recording...';
+  statusEl.textContent = 'Starting recording...';
   sysPath = `recording-${Date.now()}.wav`;
-
-  const sourceId = sourceSelect.value;
 
   try {
     // We no longer record mic in browser. Main process handles mixing.
 
-    console.log(`Attempting to start audio recording (Source: ${sourceId})...`);
-    const result = await window.electronAPI.startSysAudio({ filename: sysPath, sourceId });
+    console.log(`Attempting to start audio recording...`);
+    const result = await window.electronAPI.startSysAudio({ filename: sysPath });
     console.log('System audio result:', result);
     if (!result.ok) {
       throw new Error(result.error);
@@ -89,23 +64,22 @@ async function startRecording() {
 
     startBtn.disabled = true;
     stopBtn.disabled = false;
-    refreshSourcesBtn.disabled = true;
-    sourceSelect.disabled = true;
-    statusEl.textContent = 'Status: recording (Mixed Audio)...';
+    summarizeBtn.disabled = true;
+    statusEl.textContent = 'Recording (Mixed Audio)...';
   } catch (err) {
     console.error('Recording setup failed:', err);
-    statusEl.textContent = 'Status: error starting recording: ' + err.message;
+    statusEl.textContent = 'Error: ' + err.message;
     sysPath = null;
   }
 }
 
 async function stopRecording() {
-  statusEl.textContent = 'Status: stopping recorder...';
+  statusEl.textContent = 'Stopping recorder...';
 
   await window.electronAPI.stopSysAudio();
 
   transcriptEl.textContent = "Transcribing...";
-  statusEl.textContent = 'Status: sending to Whisper...';
+  statusEl.textContent = 'Transcribing...';
 
   const resp = await window.electronAPI.transcribeBoth({ sysPath });
   if (resp.ok && resp.result) {
@@ -116,21 +90,23 @@ async function stopRecording() {
       text: seg[2]
     }));
 
-    // segments.sort((a, b) => a.startMs - b.startMs); // Already sorted usually
-
     const sentences = groupSegmentsToSentences(segments);
 
     let text = sentences.map(seg => `[${seg.startStr} - ${seg.endStr}] ${seg.text}`).join('\n');
     transcriptEl.textContent = text || "No speech detected.";
+    statusEl.textContent = 'Ready (Audio deleted)';
+
+    if (text) {
+      summarizeBtn.disabled = false;
+    }
   } else {
     transcriptEl.textContent = "Error: " + (resp.error || "No result");
+    statusEl.textContent = 'Transcription failed';
   }
 
   startBtn.disabled = false;
   stopBtn.disabled = true;
   saveBtn.disabled = false;
-  refreshSourcesBtn.disabled = false;
-  sourceSelect.disabled = false;
   sysPath = null;
 }
 
@@ -139,9 +115,95 @@ async function saveTranscript() {
   const filename = 'transcript-' + Date.now() + '.txt';
   const resp = await window.electronAPI.saveTranscript({ filename, content });
   if (resp.ok) {
-    statusEl.textContent = 'Status: transcript saved to ' + resp.path;
+    statusEl.textContent = 'Saved to ' + resp.path;
   } else {
-    statusEl.textContent = 'Status: failed to save transcript: ' + resp.error;
+    statusEl.textContent = 'Save failed: ' + resp.error;
+  }
+}
+
+async function summarizeMeeting() {
+  const transcript = transcriptEl.textContent;
+
+  if (!transcript || transcript === "No speech detected.") {
+    alert("No transcript to summarize!");
+    return;
+  }
+
+  statusEl.textContent = 'Generating summary...';
+  summaryEl.innerHTML = "<em>Generating summary...</em>"; // Use innerHTML for styling
+  summarizeBtn.disabled = true;
+  exportPdfBtn.disabled = true;
+
+  const resp = await window.electronAPI.summarizeMeeting({ transcript });
+
+  if (resp.ok) {
+    // Parse Markdown to HTML Details
+    const formattedHtml = formatSummaryToHtml(resp.summary);
+    summaryEl.innerHTML = formattedHtml;
+    statusEl.textContent = 'Summary generated';
+    exportPdfBtn.disabled = false;
+  } else {
+    summaryEl.textContent = "Error generating summary: " + resp.error;
+    statusEl.textContent = 'Summary failed';
+  }
+  summarizeBtn.disabled = false;
+}
+
+function formatSummaryToHtml(markdown) {
+  // Simple parser for the specific structure we requested
+  // We expect ## Headers
+
+  const sections = markdown.split('## ').filter(s => s.trim());
+  let html = '';
+
+  sections.forEach(section => {
+    const lines = section.split('\n');
+    const title = lines[0].trim();
+    const content = lines.slice(1).join('\n').trim();
+
+    // Convert bullets
+    const contentHtml = content
+      .split('\n')
+      .map(line => {
+        if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
+          return `<li>${line.trim().substring(2)}</li>`;
+        }
+        return line.trim() ? `<p>${line}</p>` : '';
+      })
+      .join('');
+
+    // Determine class based on title
+    let className = '';
+    if (title.toLowerCase().includes('executive')) className = 'executive-summary';
+    else if (title.toLowerCase().includes('action')) className = 'action-items';
+    else if (title.toLowerCase().includes('decision')) className = 'decisions';
+
+    html += `
+      <details class="${className}" open>
+        <summary>${title}</summary>
+        <div class="content">
+          ${contentHtml.includes('<li>') ? `<ul>${contentHtml}</ul>` : contentHtml}
+        </div>
+      </details>
+    `;
+  });
+
+  return html || markdown; // Fallback if parsing fails
+}
+
+async function exportPdf() {
+  const htmlContent = summaryEl.innerHTML;
+  if (!htmlContent) return;
+
+  statusEl.textContent = 'Exporting PDF...';
+  const resp = await window.electronAPI.saveSummaryPdf({ htmlContent });
+
+  if (resp.ok && resp.path) {
+    statusEl.textContent = 'PDF saved to ' + resp.path;
+  } else if (resp.error !== 'Cancelled') {
+    statusEl.textContent = 'PDF export failed: ' + resp.error;
+  } else {
+    statusEl.textContent = 'PDF export cancelled';
   }
 }
 
@@ -149,7 +211,5 @@ async function saveTranscript() {
 startBtn.addEventListener('click', startRecording);
 stopBtn.addEventListener('click', stopRecording);
 saveBtn.addEventListener('click', saveTranscript);
-refreshSourcesBtn.addEventListener('click', refreshSources);
-
-// Initial load
-refreshSources();
+summarizeBtn.addEventListener('click', summarizeMeeting);
+exportPdfBtn.addEventListener('click', exportPdf);
