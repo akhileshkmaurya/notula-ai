@@ -1,118 +1,93 @@
-# Notula-AI
+# Notula AI
 
-This repository is a starter Electron application that captures microphone and system audio,
-provides a UI to start/stop recording, saves a WAV file, and includes a placeholder for integrating
-local Whisper (whisper.cpp) via `@kutalia/whisper-node-addon` or another Node binding.
+Notula AI is an intelligent meeting assistant that records audio, transcribes it in real-time using a cloud server, and generates AI-powered summaries with action items.
 
-IMPORTANT: This starter **does not** include whisper models or prebuilt native binaries.
-You must follow the integration steps below to enable local transcription.
-
-## What's included
-- Minimal Electron app (main.js, preload.js, renderer.js, index.html)
-- Start/Stop recording UI
-- System audio capture using `electron-audio-loopback`
-- Saves recorded mixed audio to `recordings/recording.wav`
-- IPC hooks where you can add whisper-node-addon integration in `main.js`
-# Notula-AI Starter
-
-A starter Electron application for recording and transcribing audio.
+## Architecture
+This application uses a **Client-Server** architecture:
+- **Client (Electron)**: Captures system audio and microphone, streams it to the server, and displays the live transcript.
+- **Server (Python/FastAPI)**: Receives audio stream, runs **Faster-Whisper** for transcription, and sends text back to the client.
 
 ## Features
-- **Mixed Audio Recording**: Records both system audio and microphone.
-- **Auto-Cleanup**: Automatically deletes recording files after transcription.
-- **AI Meeting Summary**: Generate summaries and action items using OpenAI-compatible APIs (e.g., Gemini, GPT-4).
-- Transcribe audio using Whisper (via `@kutalia/whisper-node-addon`)
+- **Real-time Transcription**: See the transcript as you speak.
+- **Cloud-Based**: Offloads heavy AI processing to a server (Google Cloud / Oracle Cloud).
+- **AI Summaries**: Generates Executive Summaries, Action Items, and Decisions using Google Gemini.
+- **PDF Export**: Export meeting summaries to professional PDF reports.
+- **Secure**: API keys are managed via `.env`.
 
-## Requirements
-- Linux OS
-- `ffmpeg` installed
-- `pactl` (PulseAudio utils) installed
-- Node.js 18+ (LTS recommended)
-- npm or yarn
-- Electron 31+ (installed via npm in this project)
-- On macOS: app signing & permissions for microphone/system audio when distributing
-- On Linux: PulseAudio or PipeWire configured for loopback capture
-- For best transcription performance: a machine with GPU support (optional) and at least 8GB RAM.
+## Prerequisites
 
-## Setup
-1. Install dependencies:
-   ```bash
-   npm install
-   ```
-2. Download the Whisper model:
-   - Create a `models` directory.
-   - Download `ggml-base.en.bin` (or other model) into `models/`.
+### Client
+- Node.js 18+
+- `ffmpeg` installed on the system.
+- `pactl` (PulseAudio utils) installed (Linux).
 
-## Running
+### Server
+- Python 3.10+
+- Docker (for deployment).
+- A cloud VM (e.g., Google Cloud e2-medium or Oracle Cloud Ampere A1).
+
+---
+
+## Setup & Installation
+
+### 1. Server Setup
+You must run the transcription server first.
+
+**Local Run:**
 ```bash
-npm start
+cd server
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python app.py
 ```
 
-## Configuration
-### AI Meeting Summary
-To enable the AI summary feature:
-1.  Create a file named `.env` in the project root.
-2.  Add your Google AI Studio API Key:
+**Cloud Deployment:**
+See the deployment guides:
+- [Google Cloud Deployment](google_cloud_deployment.md)
+- [Oracle Cloud Deployment](oracle_cloud_deployment.md)
+
+### 2. Client Setup
+1.  Install dependencies:
+    ```bash
+    npm install
     ```
-    GEMINI_API_KEY=your_actual_api_key_here
+2.  Configure Environment:
+    Create a `.env` file in the root directory:
     ```
-3.  Restart the application.
+    GEMINI_API_KEY=your_google_ai_studio_key
+    ```
+3.  Configure Server URL:
+    Open `main.js` and update `SERVER_URL` if your server is not at the default IP:
+    ```javascript
+    const SERVER_URL = 'http://<YOUR_SERVER_IP>:8000';
+    ```
 
 ## Usage
-1.  **Start the app**: `npm start`
-2.  **Record**: Click "Start Recording".
-3.  **Stop**: Click "Stop Recording".
-4.  **Summarize**: Click "Summarize Meeting" (requires API Key configuration).
-5. Wait for transcription.
+
+1.  **Start the Client**:
+    ```bash
+    npm start
+    ```
+2.  **Record**: Click **Record Meeting**. The app will connect to the server and start streaming.
+3.  **Live Transcript**: Watch the text appear in real-time.
+4.  **Stop**: Click **End Meeting**.
+5.  **Summarize**: Click **Generate AI Summary** to get insights.
+6.  **Export**: Click **Export PDF** to save the report.
 
 ## Troubleshooting
-- If app recording is silent, ensure the target app is actually playing audio *when* you start recording (or refresh sources).
-- Ensure `pactl` and `xprop` are available in your path.
 
-## What's included
-- Minimal Electron app (main.js, preload.js, renderer.js, index.html)
-- Start/Stop recording UI
-- System audio capture using `electron-audio-loopback`
-- Saves recorded mixed audio to `recordings/recording.wav`
-- IPC hooks where you can add whisper-node-addon integration in `main.js`
+### Server Disconnects
+If the server disconnects frequently on a small VM (like e2-micro), it is likely running out of memory.
+**Fix**: Enable Swap memory on the server.
+```bash
+sudo fallocate -l 2G /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+```
 
-## Quick run (development)
-1. Unzip the project and `cd` into it.
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Start the app:
-   ```bash
-   npm start
-   ```
-   On first run, grant microphone access if prompted.
+### No Audio / Flat Line
+- Ensure you are playing audio or speaking.
+- Check if `ffmpeg` is installed: `ffmpeg -version`.
+- Linux: Ensure PulseAudio is running (`pactl info`).
 
-## Enabling Whisper (local transcription)
-To enable real transcription using whisper.cpp you'll need to:
-1. Install `@kutalia/whisper-node-addon` (or another Node binding to whisper.cpp) and its native binaries:
-   ```bash
-   npm install @kutalia/whisper-node-addon
-   ```
-   If binaries are not prebuilt for your platform, you may need to build from source (see the addon's docs).
-2. Download a whisper.cpp model (e.g., `ggml-small.bin` or `ggml-base.en.bin`) from:
-   - https://huggingface.co/ggerganov/whisper.cpp
-   Place the model file under `models/` inside the project directory.
-3. Modify the `startTranscription` function in `main.js` where `USE_WHISPER` is checked.
-   The code contains comments showing where to call the transcription API and how to receive results.
-4. Optionally run `npm run rebuild` to trigger `electron-rebuild` if native modules need rebuilding for Electron.
-
-## Files of interest
-- `main.js` — Electron main process, system audio integration, IPC handlers, file saving, transcription placeholder.
-- `preload.js` — Exposes safe IPC to renderer.
-- `renderer.js` — UI: start/stop recording, display live waveform (basic), transcript area.
-- `index.html` — Simple UI layout.
-
-## Limitations and notes
-- This starter focuses on capturing audio and saving a WAV. Real-time Whisper integration is **not** auto-configured because
-  whisper models are large and platform-native binaries vary by OS and architecture.
-- Speaker diarization is **not** included. You can add pyannote or similar tools for diarization and then merge outputs with Whisper timestamps.
-- Packaging for distribution (Windows .exe, macOS .app, Linux .deb/.AppImage) requires additional steps (`electron-builder` recommended).
-
-
-export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/legion/project91/notula-ai/node_modules/@kutalia/whisper-node-addon/dist/linux-x64
+## License
+MIT

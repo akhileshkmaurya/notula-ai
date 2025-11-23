@@ -5,6 +5,15 @@ const statusEl = document.getElementById('status');
 const transcriptEl = document.getElementById('transcript');
 
 let sysPath = null;
+let isRecording = false;
+
+function updateUIState() {
+  startBtn.disabled = isRecording;
+  stopBtn.disabled = !isRecording;
+  saveBtn.disabled = isRecording;
+  summarizeBtn.disabled = isRecording;
+  exportPdfBtn.disabled = isRecording;
+}
 
 function groupSegmentsToSentences(segments) {
   if (!segments.length) return [];
@@ -48,66 +57,55 @@ const exportPdfBtn = document.getElementById('exportPdfBtn');
 
 /* ---------- Main Flow ---------- */
 
+// Real-time transcript updates
+window.electronAPI.onTranscriptUpdate((text) => {
+  // Append new text to the transcript
+  const p = document.createElement('p');
+  p.textContent = text;
+  transcriptEl.appendChild(p);
+
+  // Auto-scroll to bottom
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+});
+
 async function startRecording() {
-  statusEl.textContent = 'Starting recording...';
-  sysPath = `recording-${Date.now()}.wav`;
-
   try {
-    // We no longer record mic in browser. Main process handles mixing.
+    isRecording = true;
+    updateUIState();
+    statusEl.textContent = 'Recording...';
+    transcriptEl.innerHTML = ''; // Clear previous transcript
 
-    console.log(`Attempting to start audio recording...`);
-    const result = await window.electronAPI.startSysAudio({ filename: sysPath });
-    console.log('System audio result:', result);
-    if (!result.ok) {
-      throw new Error(result.error);
+    // Start System Audio Recording (streams to server)
+    const sysFilename = `sys_audio_${Date.now()}.wav`;
+    const sysResult = await window.electronAPI.startSysAudio(sysFilename);
+
+    if (!sysResult.ok) {
+      throw new Error('Failed to start system audio recording: ' + sysResult.error);
     }
 
-    startBtn.disabled = true;
-    stopBtn.disabled = false;
-    summarizeBtn.disabled = true;
-    statusEl.textContent = 'Recording (Mixed Audio)...';
   } catch (err) {
-    console.error('Recording setup failed:', err);
+    console.error('Error starting recording:', err);
     statusEl.textContent = 'Error: ' + err.message;
-    sysPath = null;
+    isRecording = false;
+    updateUIState();
   }
 }
 
 async function stopRecording() {
-  statusEl.textContent = 'Stopping recorder...';
+  try {
+    isRecording = false;
+    updateUIState();
+    statusEl.textContent = 'Stopping...';
 
-  await window.electronAPI.stopSysAudio();
+    // Stop System Audio (stops ffmpeg and streaming)
+    await window.electronAPI.stopSysAudio();
 
-  transcriptEl.textContent = "Transcribing...";
-  statusEl.textContent = 'Transcribing...';
+    statusEl.textContent = 'Meeting Ended';
 
-  const resp = await window.electronAPI.transcribeBoth({ sysPath });
-  if (resp.ok && resp.result) {
-    const segments = resp.result.map(seg => ({
-      startMs: parseTimestampToMs(seg[0]),
-      startStr: seg[0],
-      endStr: seg[1],
-      text: seg[2]
-    }));
-
-    const sentences = groupSegmentsToSentences(segments);
-
-    let text = sentences.map(seg => `[${seg.startStr} - ${seg.endStr}] ${seg.text}`).join('\n');
-    transcriptEl.textContent = text || "No speech detected.";
-    statusEl.textContent = 'Ready (Audio deleted)';
-
-    if (text) {
-      summarizeBtn.disabled = false;
-    }
-  } else {
-    transcriptEl.textContent = "Error: " + (resp.error || "No result");
-    statusEl.textContent = 'Transcription failed';
+  } catch (err) {
+    console.error('Error stopping recording:', err);
+    statusEl.textContent = 'Error: ' + err.message;
   }
-
-  startBtn.disabled = false;
-  stopBtn.disabled = true;
-  saveBtn.disabled = false;
-  sysPath = null;
 }
 
 async function saveTranscript() {
@@ -134,7 +132,7 @@ async function summarizeMeeting() {
   summarizeBtn.disabled = true;
   exportPdfBtn.disabled = true;
 
-  const resp = await window.electronAPI.summarizeMeeting({ transcript });
+  const resp = await window.electronAPI.summarizeMeeting(transcript);
 
   if (resp.ok) {
     // Parse Markdown to HTML Details

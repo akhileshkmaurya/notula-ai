@@ -1,46 +1,54 @@
-const OpenAI = require('openai');
+const { GoogleGenerativeAI } = require("@google/generative-ai");
+require('dotenv').config();
 
-const GEMINI_API_KEY = 'AIzaSyDzG5xxuanbABpqBosjRoA0M7yzEzPW3ZA';
-
-async function testGemini() {
-    console.log('Testing Gemini API...');
-
-    // Try 1: Standard v1beta/openai/
+async function testModel(modelName) {
+    console.log(`\nTesting model: ${modelName}...`);
     try {
-        console.log('\n--- Attempt 1: v1beta/openai/ ---');
-        const client = new OpenAI({
-            apiKey: GEMINI_API_KEY,
-            baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/'
-        });
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+            console.error("❌ No API Key found in .env");
+            return;
+        }
+        console.log(`API Key: ${apiKey.substring(0, 4)}...`);
 
-        const response = await client.chat.completions.create({
-            model: 'gemini-flash-latest',
-            messages: [{ role: 'user', content: 'Hello, are you working?' }],
-        });
-        console.log('Success:', response.choices[0].message.content);
-        return;
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({ model: modelName });
+
+        const result = await model.generateContent("Hello, can you hear me?");
+        const response = await result.response;
+        const text = response.text();
+
+        console.log(`✅ Success with ${modelName}!`);
+        console.log("Response:", text);
     } catch (error) {
-        console.error('Error:', error.message);
-        if (error.response) console.error('Status:', error.response.status);
-    }
-
-    // Try 2: No trailing slash
-    try {
-        console.log('\n--- Attempt 2: v1beta/openai ---');
-        const client = new OpenAI({
-            apiKey: GEMINI_API_KEY,
-            baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai'
-        });
-
-        const response = await client.chat.completions.create({
-            model: 'gemini-flash-latest',
-            messages: [{ role: 'user', content: 'Hello, are you working?' }],
-        });
-        console.log('Success:', response.choices[0].message.content);
-        return;
-    } catch (error) {
-        console.error('Error:', error.message);
+        console.error(`❌ Failed with ${modelName}:`);
+        console.error(error.message);
     }
 }
 
-testGemini();
+async function listModels() {
+    const apiKey = process.env.GEMINI_API_KEY;
+    const genAI = new GoogleGenerativeAI(apiKey);
+    // For listing models, we use the model manager if available, or just try to infer.
+    // Actually, the SDK doesn't have a direct listModels method on the top level easily exposed in all versions.
+    // Let's try to just test a few known variants.
+
+    const variants = [
+        'gemini-1.5-flash',
+        'gemini-1.5-flash-latest',
+        'gemini-1.5-flash-001',
+        'gemini-1.0-pro',
+        'gemini-pro'
+    ];
+
+    for (const model of variants) {
+        await testModel(model);
+    }
+}
+
+async function main() {
+    await testModel('gemini-2.0-flash');
+    await testModel('gemini-flash-latest');
+}
+
+main();

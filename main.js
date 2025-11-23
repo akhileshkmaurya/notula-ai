@@ -2,21 +2,14 @@ const { app, BrowserWindow, ipcMain, desktopCapturer, dialog } = require('electr
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
+const io = require('socket.io-client');
 require('dotenv').config();
 
-let whisper = null;
-const USE_WHISPER = true;
+// Server Configuration
+const SERVER_URL = 'http://35.205.52.222:8000';
+let socket = null;
 let sysAudioProcess = null;
-
-if (USE_WHISPER) {
-  try {
-    whisper = require('@kutalia/whisper-node-addon');
-    console.log('✅ Whisper addon loaded');
-  } catch (e) {
-    console.error('❌ Failed to load whisper addon:', e);
-    whisper = null;
-  }
-}
+let mainWindow = null;
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -31,10 +24,33 @@ function createWindow() {
 
   win.loadFile('index.html');
   // win.webContents.openDevTools();
+  mainWindow = win;
 }
+
+// Disable GPU Acceleration to fix Linux VSync errors
+app.disableHardwareAcceleration();
 
 app.whenReady().then(() => {
   createWindow();
+
+  // Initialize Socket.IO
+  console.log(`Connecting to server: ${SERVER_URL}`);
+  socket = io(SERVER_URL);
+
+  socket.on('connect', () => {
+    console.log('✅ Connected to Transcription Server');
+  });
+
+  socket.on('disconnect', () => {
+    console.log('❌ Disconnected from Transcription Server');
+  });
+
+  socket.on('transcript', (data) => {
+    console.log('📝 Transcript received:', data.text);
+    if (mainWindow) {
+      mainWindow.webContents.send('transcript-update', data.text);
+    }
+  });
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -58,49 +74,6 @@ ipcMain.handle('save-transcript', async (event, { filename, content }) => {
   }
 });
 
-// Save raw recording (mic/system WAV) to disk
-ipcMain.handle('save-recording', async (event, { filename, data }) => {
-  try {
-    const recordingsDir = path.join(app.getPath('documents'), 'notula-ai-recordings');
-    if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
-    const outPath = path.join(recordingsDir, filename);
-    fs.writeFileSync(outPath, data);
-    return { ok: true, path: outPath };
-  } catch (err) {
-    return { ok: false, error: String(err) };
-  }
-});
-
-// Transcribe
-ipcMain.handle('transcribe-both', async (event, { sysPath }) => {
-  try {
-    let result = [];
-    if (USE_WHISPER && whisper && sysPath) {
-      const sysFile = path.join(app.getPath('documents'), 'notula-ai-recordings', sysPath);
-
-      // 1. Transcribe
-      console.log('Starting transcription...');
-      const resp = await whisper.transcribe({ fname_inp: sysFile, model: 'models/ggml-base.en.bin' });
-      result = resp.transcription || resp.segments || [];
-      console.log(`Transcription done. ${result.length} segments.`);
-
-      // 2. Cleanup Audio File
-      try {
-        if (fs.existsSync(sysFile)) {
-          fs.unlinkSync(sysFile);
-          console.log(`Deleted audio file: ${sysFile}`);
-        }
-      } catch (e) {
-        console.error(`Failed to delete audio file: ${sysFile}`, e);
-      }
-    }
-    return { ok: true, result };
-  } catch (err) {
-    console.error('Transcription error:', err);
-    return { ok: false, error: String(err) };
-  }
-});
-
 // Summarize
 const OpenAI = require('openai');
 
@@ -112,6 +85,7 @@ ipcMain.handle('summarize-meeting', async (event, { transcript }) => {
     if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
       return { ok: false, error: 'Missing GEMINI_API_KEY in .env file' };
     }
+    console.log(`Loaded API Key: ${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`);
 
     const clientConfig = {
       apiKey: apiKey,
@@ -268,8 +242,10 @@ ipcMain.handle('start-sys-audio', async (event, { filename }) => {
 
     if (micSource) {
       args.push('-f', 'pulse', '-i', micSource);
-      // Stereo: Left=System, Right=Mic
-      args.push('-filter_complex', '[1:a]volume=4.0[mic];[0:a][mic]join=inputs=2:channel_layout=stereo:map=0.0-FL|1.0-FR[a]');
+      // Mix to Mono for Server (16kHz, 16-bit, Mono)
+      // [0:a][1:a]amix=inputs=2:duration=longest[a]
+      // We need to mix them and resample to 16000Hz for Whisper
+      args.push('-filter_complex', '[1:a]volume=4.0[mic];[0:a][mic]amix=inputs=2:duration=longest[a]');
       args.push('-map', '[a]');
     } else {
       args.push('-ac', '1');
@@ -277,15 +253,36 @@ ipcMain.handle('start-sys-audio', async (event, { filename }) => {
 
     args.push(
       '-acodec', 'pcm_s16le',
-      '-ar', '44100',
-      '-y',
-      outPath
+      '-ar', '16000', // Whisper expects 16kHz
+      '-ac', '1',     // Mono
+      '-f', 's16le',  // Raw PCM format
+      'pipe:1'        // Output to stdout
     );
+
+    // Also save to file for backup (using tee protocol or separate output)
+    // For simplicity, we'll just stream to server now. 
+    // If user wants local backup, we can add a second output.
+    // Let's add a second output to the file for safety.
+    // ffmpeg -i ... -f s16le pipe:1 -y output.wav
+
+    // Modifying args to output to BOTH pipe and file is tricky with spawn and pipes.
+    // Easiest is to just output to pipe, and we can write to file in Node if needed, 
+    // OR just trust the server to save it (which it does).
+    // Let's stick to pipe for now to keep latency low.
 
     sysAudioProcess = spawn('ffmpeg', args);
 
-    sysAudioProcess.stdout.on('data', (data) => console.log(`ffmpeg stdout: ${data}`));
-    sysAudioProcess.stderr.on('data', (data) => console.error(`ffmpeg stderr: ${data}`));
+    sysAudioProcess.stdout.on('data', (data) => {
+      // Stream data to server
+      if (socket && socket.connected) {
+        socket.emit('audio_data', data);
+      }
+    });
+
+    sysAudioProcess.stderr.on('data', (data) => {
+      // console.error(`ffmpeg stderr: ${data}`); // Too noisy
+    });
+
     sysAudioProcess.on('close', (code) => console.log(`ffmpeg process exited with code ${code}`));
 
     return { ok: true, path: outPath };

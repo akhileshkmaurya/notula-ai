@@ -1,12 +1,11 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  saveTranscript: (data) => ipcRenderer.invoke('save-transcript', data),
-  saveRecording: (data) => ipcRenderer.invoke('save-recording', data),
-  transcribeBoth: (data) => ipcRenderer.invoke('transcribe-both', data),
-  summarizeMeeting: (args) => ipcRenderer.invoke('summarize-meeting', args),
-  saveSummaryPdf: (args) => ipcRenderer.invoke('save-summary-pdf', args),
-  startSysAudio: (data) => ipcRenderer.invoke('start-sys-audio', data),
+  startSysAudio: (filename) => ipcRenderer.invoke('start-sys-audio', { filename }),
   stopSysAudio: () => ipcRenderer.invoke('stop-sys-audio'),
+  saveTranscript: (filename, content) => ipcRenderer.invoke('save-transcript', { filename, content }),
+  summarizeMeeting: (transcript) => ipcRenderer.invoke('summarize-meeting', { transcript }),
+  saveSummaryPdf: (htmlContent) => ipcRenderer.invoke('save-summary-pdf', { htmlContent }),
   getSources: () => ipcRenderer.invoke('get-sources'),
+  onTranscriptUpdate: (callback) => ipcRenderer.on('transcript-update', (_event, value) => callback(value)),
 });
