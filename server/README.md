@@ -45,9 +45,19 @@ This is the backend server for Notula AI, designed to handle real-time audio str
     docker run -d --name notula-app --restart unless-stopped -p 8000:8000 notula-server
     ```
 
+## Easy Deployment (Update)
+
+To update the server code without manually SSH-ing:
+
+1.  **Setup SSH Access**: Follow the [SSH Setup Guide](../ssh_setup_guide.md) to connect from your local machine.
+2.  **Configure Script**: Open `deploy.sh` and update `REMOTE_USER` and `KEY_PATH`.
+3.  **Run Script**:
+    ```bash
+    ./deploy.sh
+    ```
+    This will copy the files, rebuild the Docker image, and restart the container automatically.
+
 ## API
-- **Socket.IO Endpoint**: `/`
-- **Events**:
-    - `connect`: Start session.
-    - `audio_data`: Send binary PCM data (16kHz, 16-bit, Mono).
-    - `transcript`: Receive text updates.
+- **Endpoint**: `POST /transcribe`
+- **Input**: `multipart/form-data` with `file` (WAV audio).
+- **Output**: JSON `{ "text": "Transcribed text..." }`

@@ -2,12 +2,10 @@ const { app, BrowserWindow, ipcMain, desktopCapturer, dialog } = require('electr
 const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
-const io = require('socket.io-client');
 require('dotenv').config();
 
 // Server Configuration
 const SERVER_URL = 'http://35.205.52.222:8000';
-let socket = null;
 let sysAudioProcess = null;
 let mainWindow = null;
 
@@ -32,25 +30,6 @@ app.disableHardwareAcceleration();
 
 app.whenReady().then(() => {
   createWindow();
-
-  // Initialize Socket.IO
-  console.log(`Connecting to server: ${SERVER_URL}`);
-  socket = io(SERVER_URL);
-
-  socket.on('connect', () => {
-    console.log('✅ Connected to Transcription Server');
-  });
-
-  socket.on('disconnect', () => {
-    console.log('❌ Disconnected from Transcription Server');
-  });
-
-  socket.on('transcript', (data) => {
-    console.log('📝 Transcript received:', data.text);
-    if (mainWindow) {
-      mainWindow.webContents.send('transcript-update', data.text);
-    }
-  });
 
   app.on('activate', function () {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -221,6 +200,36 @@ async function getSystemAudioDevice() {
   });
 }
 
+// --- WAV Header Helper ---
+function writeWavHeader(samples, sampleRate = 16000, numChannels = 1, bitDepth = 16) {
+  const buffer = Buffer.alloc(44);
+  const byteRate = (sampleRate * numChannels * bitDepth) / 8;
+  const blockAlign = (numChannels * bitDepth) / 8;
+  const dataSize = samples.length;
+  const chunkSize = 36 + dataSize;
+
+  // RIFF chunk descriptor
+  buffer.write('RIFF', 0);
+  buffer.writeUInt32LE(chunkSize, 4);
+  buffer.write('WAVE', 8);
+
+  // fmt sub-chunk
+  buffer.write('fmt ', 12);
+  buffer.writeUInt32LE(16, 16); // Subchunk1Size (16 for PCM)
+  buffer.writeUInt16LE(1, 20);  // AudioFormat (1 for PCM)
+  buffer.writeUInt16LE(numChannels, 22);
+  buffer.writeUInt32LE(sampleRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitDepth, 34);
+
+  // data sub-chunk
+  buffer.write('data', 36);
+  buffer.writeUInt32LE(dataSize, 40);
+
+  return buffer;
+}
+
 // --- IPC Handlers ---
 
 ipcMain.handle('start-sys-audio', async (event, { filename }) => {
@@ -272,10 +281,54 @@ ipcMain.handle('start-sys-audio', async (event, { filename }) => {
 
     sysAudioProcess = spawn('ffmpeg', args);
 
-    sysAudioProcess.stdout.on('data', (data) => {
-      // Stream data to server
-      if (socket && socket.connected) {
-        socket.emit('audio_data', data);
+    let audioBuffer = Buffer.alloc(0);
+    const CHUNK_DURATION_MS = 10000; // 10 seconds
+    const BYTES_PER_SECOND = 16000 * 2; // 16kHz * 16-bit (16-bit PCM is 2 bytes per sample)
+    const CHUNK_SIZE = BYTES_PER_SECOND * (CHUNK_DURATION_MS / 1000);
+
+    sysAudioProcess.stdout.on('data', async (data) => {
+      audioBuffer = Buffer.concat([audioBuffer, data]);
+
+      if (audioBuffer.length >= CHUNK_SIZE) {
+        // Extract chunk
+        const chunk = audioBuffer.slice(0, CHUNK_SIZE);
+        audioBuffer = audioBuffer.slice(CHUNK_SIZE);
+
+        // Process chunk
+        console.log(`Processing chunk of size ${chunk.length} bytes...`);
+
+        try {
+          // Add WAV header
+          const header = writeWavHeader(chunk);
+          const wavData = Buffer.concat([header, chunk]);
+
+          // Send to server
+          // Use a polyfill for Blob and FormData if running in Node.js context without browser APIs
+          // For Electron's main process, we need to ensure these are available or use alternatives.
+          // Node.js v18+ has global Blob and FormData. For older versions or explicit control,
+          // one might use 'form-data' package and convert Buffer to Blob.
+          // Assuming Node.js v18+ or Electron's environment provides these.
+          const blob = new Blob([wavData], { type: 'audio/wav' });
+          const formData = new FormData();
+          formData.append('file', blob, 'chunk.wav');
+
+          const response = await fetch(`${SERVER_URL}/transcribe`, {
+            method: 'POST',
+            body: formData
+          });
+
+          if (response.ok) {
+            const result = await response.json();
+            if (result.text && mainWindow) {
+              console.log(`Transcript: ${result.text}`);
+              mainWindow.webContents.send('transcript-update', result.text);
+            }
+          } else {
+            console.error('Server error:', response.statusText);
+          }
+        } catch (e) {
+          console.error('Upload failed:', e);
+        }
       }
     });
 
