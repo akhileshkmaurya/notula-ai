@@ -52,11 +52,35 @@ function createWindow() {
 app.disableHardwareAcceleration();
 
 app.whenReady().then(() => {
-  createLoginWindow(); // Show login first
+  // Try to load existing session
+  const hasSession = googleAuth.loadSession();
+
+  if (hasSession && googleAuth.isAuthenticated()) {
+    console.log('Restored session for user:', googleAuth.getUserInfo().email);
+    createWindow();
+  } else {
+    console.log('No valid session found, showing login window');
+    createLoginWindow();
+  }
 
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createLoginWindow();
+    if (BrowserWindow.getAllWindows().length === 0) {
+      if (googleAuth.isAuthenticated()) {
+        createWindow();
+      } else {
+        createLoginWindow();
+      }
+    }
   });
+});
+
+ipcMain.handle('logout', async () => {
+  googleAuth.logout();
+  if (mainWindow) {
+    mainWindow.close();
+    mainWindow = null;
+  }
+  createLoginWindow();
 });
 
 app.on('window-all-closed', function () {

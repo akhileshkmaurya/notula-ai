@@ -211,3 +211,8 @@ stopBtn.addEventListener('click', stopRecording);
 saveBtn.addEventListener('click', saveTranscript);
 summarizeBtn.addEventListener('click', summarizeMeeting);
 exportPdfBtn.addEventListener('click', exportPdf);
+document.getElementById('logoutBtn').addEventListener('click', () => {
+  if (confirm('Are you sure you want to sign out?')) {
+    window.electronAPI.logout();
+  }
+});

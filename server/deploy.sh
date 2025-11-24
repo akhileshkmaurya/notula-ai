@@ -66,6 +66,7 @@ ssh $KEY_PATH $REMOTE_USER@$REMOTE_HOST <<'EOF'
         --name notula-app \
         --restart unless-stopped \
         -p 8000:8000 \
+        -e WHISPER_MODEL=tiny.en \
         --env-file .env \
         notula-server
     

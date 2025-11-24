@@ -1,14 +1,27 @@
 import os
 import io
+import sys
 import asyncio
-import numpy as np
+import time
+from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 from auth_middleware import get_current_user
+import logging
 
-# Initialize FastAPI
-app = FastAPI()
+# Configure minimal logging
+logging.basicConfig(
+    level=logging.WARNING,  # Only show warnings and errors from libraries
+    format='%(message)s'
+)
+
+# Disable uvicorn access logs
+logging.getLogger("uvicorn.access").disabled = True
+logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+
+# Initialize FastAPI with minimal logging
+app = FastAPI(docs_url=None, redoc_url=None)  # Disable docs to reduce overhead
 
 # Enable CORS
 app.add_middleware(
@@ -19,12 +32,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Whisper Model
-# 'tiny' or 'base' is recommended for real-time on CPU. 
-MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
-print(f"Loading Whisper model: {MODEL_SIZE}...")
-model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
-print("Whisper model loaded.")
+# Initialize Whisper Model (only log once at startup)
+# 'tiny.en' is much faster for English and suitable for CPU
+MODEL_SIZE = os.getenv("WHISPER_MODEL", "tiny.en")
+
+# Limit threads to avoid contention on small VMs (e2-medium has 2 vCPUs)
+# intra_threads=4 is good for latency on single request, but for concurrency on 2 cores,
+# we should let the OS schedule. faster-whisper default is usually fine, but explicit is safer.
+model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=4)
+
+@app.on_event("startup")
+async def startup_event():
+    """Print minimal startup confirmation"""
+    timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    print(f"{timestamp} | SERVER_STARTED | model={MODEL_SIZE} | threads=4", flush=True)
 
 @app.get("/")
 async def root():
@@ -35,23 +56,16 @@ async def transcribe_audio(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
+    start_time = time.time()
+    user_email = current_user.get('email', 'unknown')
+    
     try:
-        # Log the authenticated user
-        print(f"Transcribing audio for user: {current_user.get('email')}")
-        
         # Read file content
         content = await file.read()
-        
-        # Convert to numpy array
-        # We assume the client sends a valid WAV file (16kHz, 16-bit, Mono)
-        # or we can let faster-whisper handle the decoding from the bytes directly if we write to a temp file
-        # or use a BytesIO object. faster-whisper accepts a file-like object or path.
-        
         audio_file = io.BytesIO(content)
         
         # Run transcription in a separate thread
         loop = asyncio.get_event_loop()
-        print("Starting transcription (beam_size=1, language=en, vad=True)...")
         segments, _ = await loop.run_in_executor(
             None, 
             lambda: list(model.transcribe(
@@ -66,13 +80,29 @@ async def transcribe_audio(
         # Collect text
         text = " ".join([segment.text for segment in segments]).strip()
         
-        print(f"Transcribed: {text}")
-        return {"text": text, "user": current_user.get('email')}
+        # Calculate response time
+        response_time = time.time() - start_time
+        
+        # Minimal log: timestamp | user | response_time
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"{timestamp} | {user_email} | {response_time:.2f}s", flush=True)
+        
+        return {"text": text, "user": user_email}
 
     except Exception as e:
-        print(f"Error during transcription: {e}")
+        response_time = time.time() - start_time
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"{timestamp} | {user_email} | {response_time:.2f}s | ERROR: {str(e)}", flush=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Disable uvicorn's default logging
+    uvicorn.run(
+        app, 
+        host="0.0.0.0", 
+        port=8000,
+        log_level="warning",
+        access_log=False
+    )
+

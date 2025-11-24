@@ -3,9 +3,6 @@ from fastapi import HTTPException, Security, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from google.oauth2 import id_token
 from google.auth.transport import requests
-import logging
-
-logger = logging.getLogger(__name__)
 
 # Security scheme
 security = HTTPBearer()
@@ -18,7 +15,6 @@ async def verify_google_token(credentials: HTTPAuthorizationCredentials = Securi
     Verify Google ID token and return user information
     """
     if not GOOGLE_CLIENT_ID:
-        logger.warning("GOOGLE_CLIENT_ID not set, skipping authentication")
         # In development, you might want to skip auth if not configured
         # In production, this should raise an error
         return {"email": "dev@localhost", "sub": "dev", "name": "Development User"}
@@ -46,19 +42,16 @@ async def verify_google_token(credentials: HTTPAuthorizationCredentials = Securi
             'email_verified': idinfo.get('email_verified', False)
         }
         
-        logger.info(f"Authenticated user: {user_info['email']}")
         return user_info
         
-    except ValueError as e:
+    except ValueError:
         # Invalid token
-        logger.error(f"Token verification failed: {str(e)}")
         raise HTTPException(
             status_code=401,
             detail="Invalid authentication credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    except Exception as e:
-        logger.error(f"Authentication error: {str(e)}")
+    except Exception:
         raise HTTPException(
             status_code=401,
             detail="Could not validate credentials",
@@ -73,3 +66,4 @@ async def get_current_user(user_info: dict = Depends(verify_google_token)):
         raise HTTPException(status_code=403, detail="Email not verified")
     
     return user_info
+
