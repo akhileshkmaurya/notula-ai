@@ -332,139 +332,62 @@ function writeWavHeader(samples, sampleRate = 16000, numChannels = 1, bitDepth =
   return buffer;
 }
 
-ipcMain.handle('start-sys-audio', async (event, { filename }) => {
-  console.log(`IPC_MAIN: start-sys-audio received.`);
+ipcMain.handle('upload-audio-chunk', async (event, { chunk }) => {
   try {
-    const recordingsDir = path.join(app.getPath('documents'), 'notula-ai-recordings');
-    if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
-    const outPath = path.join(recordingsDir, filename);
+    // chunk is an ArrayBuffer from renderer
+    const buffer = Buffer.from(chunk);
 
-    let args = [];
+    console.log(`Processing chunk of size ${buffer.length} bytes...`);
 
-    if (process.platform === 'linux') {
-      console.log('Detecting Linux audio devices...');
-      const device = await getLinuxAudioDevice();
-      const micSource = await execPromise('pactl get-default-source').catch(() => null);
+    // Add WAV header
+    // Note: chunk is raw PCM (16kHz, 16-bit, mono)
+    const header = writeWavHeader(buffer);
+    const wavData = Buffer.concat([header, buffer]);
 
-      console.log(`Found device: ${device}, Mic: ${micSource}`);
+    const blob = new Blob([wavData], { type: 'audio/wav' });
+    const formData = new FormData();
+    formData.append('file', blob, 'chunk.wav');
 
-      args = ['-f', 'pulse', '-i', device];
-      if (micSource) {
-        args.push('-f', 'pulse', '-i', micSource);
-        args.push('-filter_complex', '[1:a]volume=4.0[mic];[0:a][mic]amix=inputs=2:duration=longest[a]');
-        args.push('-map', '[a]');
-      } else {
-        args.push('-ac', '1');
-      }
-    } else if (process.platform === 'win32') {
-      console.log('Detecting Windows audio devices...');
-      const devices = await getWindowsAudioDevices();
-      console.log('Available devices:', devices);
-
-      if (devices.length === 0) throw new Error('No audio devices found');
-
-      // Try to find a "Stereo Mix" or "Wave" for system audio, otherwise use first device (Mic)
-      // Note: Windows doesn't expose system audio loopback easily via dshow without drivers.
-      // We will use the first available input device (usually Microphone).
-      const device = devices[0];
-      console.log(`Using Windows device: ${device}`);
-
-      args = ['-f', 'dshow', '-i', `audio=${device}`];
-    } else {
-      throw new Error(`Unsupported platform: ${process.platform}`);
+    // Get the ID token for authentication
+    const idToken = googleAuth.getIdToken();
+    const headers = {};
+    if (idToken) {
+      headers['Authorization'] = `Bearer ${idToken}`;
     }
 
-    // Common output args
-    args.push(
-      '-acodec', 'pcm_s16le',
-      '-ar', '16000', // Whisper expects 16kHz
-      '-ac', '1',     // Mono
-      '-f', 's16le',  // Raw PCM format
-      'pipe:1'        // Output to stdout
-    );
+    const response = await fetch(`${SERVER_URL}/transcribe`, {
+      method: 'POST',
+      headers: headers,
+      body: formData
+    });
 
-    console.log(`Starting ffmpeg with: ${ffmpegPath} ${args.join(' ')}`);
-    sysAudioProcess = spawn(ffmpegPath, args);
-
-    let audioBuffer = Buffer.alloc(0);
-    const CHUNK_DURATION_MS = 10000; // 10 seconds
-    const BYTES_PER_SECOND = 16000 * 2; // 16kHz * 16-bit
-    const CHUNK_SIZE = BYTES_PER_SECOND * (CHUNK_DURATION_MS / 1000);
-
-    sysAudioProcess.stdout.on('data', async (data) => {
-      audioBuffer = Buffer.concat([audioBuffer, data]);
-
-      if (audioBuffer.length >= CHUNK_SIZE) {
-        // Extract chunk
-        const chunk = audioBuffer.slice(0, CHUNK_SIZE);
-        audioBuffer = audioBuffer.slice(CHUNK_SIZE);
-
-        // Process chunk
-        console.log(`Processing chunk of size ${chunk.length} bytes...`);
-
-        try {
-          // Add WAV header
-          const header = writeWavHeader(chunk);
-          const wavData = Buffer.concat([header, chunk]);
-
-          const blob = new Blob([wavData], { type: 'audio/wav' });
-          const formData = new FormData();
-          formData.append('file', blob, 'chunk.wav');
-
-          // Get the ID token for authentication
-          const idToken = googleAuth.getIdToken();
-          const headers = {};
-          if (idToken) {
-            headers['Authorization'] = `Bearer ${idToken}`;
-          }
-
-          const response = await fetch(`${SERVER_URL}/transcribe`, {
-            method: 'POST',
-            headers: headers,
-            body: formData
-          });
-
-          if (response.ok) {
-            const result = await response.json();
-            if (result.text && mainWindow) {
-              console.log(`Transcript: ${result.text}`);
-              mainWindow.webContents.send('transcript-update', result.text);
-            }
-          } else {
-            console.error('Server error:', response.statusText);
-          }
-        } catch (e) {
-          console.error('Upload failed:', e);
-        }
+    if (response.ok) {
+      const result = await response.json();
+      if (result.text && mainWindow) {
+        console.log(`Transcript: ${result.text}`);
+        mainWindow.webContents.send('transcript-update', result.text);
       }
-    });
-
-    sysAudioProcess.stderr.on('data', (data) => {
-      console.error(`ffmpeg stderr: ${data}`);
-    });
-
-    sysAudioProcess.on('close', (code) => console.log(`ffmpeg process exited with code ${code}`));
-
-    return { ok: true, path: outPath };
-
-  } catch (err) {
-    console.error('Error starting sys audio:', err);
-    return { ok: false, error: String(err) };
+      return { ok: true };
+    } else {
+      console.error('Server error:', response.statusText);
+      return { ok: false, error: response.statusText };
+    }
+  } catch (e) {
+    console.error('Upload failed:', e);
+    return { ok: false, error: String(e) };
   }
 });
 
+ipcMain.handle('get-sources', async () => {
+  const sources = await desktopCapturer.getSources({ types: ['screen'] });
+  return sources.map(source => ({
+    id: source.id,
+    name: source.name,
+    thumbnail: source.thumbnail.toDataURL()
+  }));
+});
+
 ipcMain.handle('stop-sys-audio', async (event) => {
-  try {
-    if (sysAudioProcess) {
-      if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', sysAudioProcess.pid, '/f', '/t']);
-      } else {
-        sysAudioProcess.kill('SIGINT');
-      }
-      sysAudioProcess = null;
-    }
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, error: String(err) };
-  }
+  // Legacy handler kept for compatibility, but now logic is in renderer
+  return { ok: true };
 });

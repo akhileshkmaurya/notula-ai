@@ -66,32 +66,10 @@ You can build the Windows `.exe` from your Linux machine.
 
 ## ⚠️ Known Limitations on Windows
 
-### System Audio Capture (Important)
-By default, **Windows does not allow apps to record "System Audio"** (what you hear from speakers) directly through the method we use (DirectShow).
-
-*   **Default Behavior**: The app will record your **Microphone**. This means it will hear *you*, but it might not hear *other people* in the meeting unless your speakers are loud enough for your mic to pick them up.
-*   **How to Record System Audio**:
-    To record both your mic and the meeting audio, you have two options:
-
-    #### Option A: Enable "Stereo Mix" (Built-in)
-    1.  Right-click the Sound icon in your taskbar > **Sound settings**.
-    2.  Click **More sound settings** (or Sound Control Panel).
-    3.  Go to the **Recording** tab.
-    4.  Right-click and select **"Show Disabled Devices"**.
-    5.  Right-click **"Stereo Mix"** and click **Enable**.
-    6.  *Note: This will record everything you hear, but might mute your mic depending on the driver.*
-
-    #### Option B: Use VB-Cable (Recommended)
-    1.  Install [VB-Cable](https://vb-audio.com/Cable/) (Free).
-    2.  Set your meeting software (Zoom/Teams) Output to **CABLE Input**.
-    3.  The app will then be able to "hear" the meeting audio if you select the CABLE Output as your default recording device.
-
-*   **Future Improvement**: We plan to implement native loopback capture in a future update to solve this automatically.
+*   **Antivirus Warnings**:
+    *   Since the app is not code-signed (which costs money), Windows Defender might show a "Unknown Publisher" warning. Users can click "More Info" -> "Run Anyway".
 
 ## 🛠 Troubleshooting
 
 *   **"ffmpeg not found"**:
     *   The app uses `ffmpeg-static`. If this error occurs, ensure `node_modules` was not excluded from the build improperly. The `asarUnpack` setting in `package.json` handles this.
-
-*   **Antivirus Warnings**:
-    *   Since the app is not code-signed (which costs money), Windows Defender might show a "Unknown Publisher" warning. Users can click "More Info" -> "Run Anyway".

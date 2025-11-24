@@ -68,27 +68,124 @@ window.electronAPI.onTranscriptUpdate((text) => {
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 });
 
+let audioContext = null;
+let scriptProcessor = null;
+let micStream = null;
+let desktopStream = null;
+let audioInput = null;
+let desktopInput = null;
+let audioBuffer = [];
+const SAMPLE_RATE = 16000;
+const BUFFER_SIZE = 4096;
+const CHUNK_TIME_MS = 10000; // 10 seconds
+
 async function startRecording() {
   try {
     isRecording = true;
     updateUIState();
-    statusEl.textContent = 'Recording...';
-    transcriptEl.innerHTML = ''; // Clear previous transcript
+    statusEl.textContent = 'Initializing audio...';
+    transcriptEl.innerHTML = '';
 
-    // Start System Audio Recording (streams to server)
-    const sysFilename = `sys_audio_${Date.now()}.wav`;
-    const sysResult = await window.electronAPI.startSysAudio(sysFilename);
+    // 1. Get Desktop Source ID
+    const sources = await window.electronAPI.getSources();
+    const screenSource = sources.find(s => s.name === 'Entire Screen' || s.name === 'Screen 1') || sources[0];
 
-    if (!sysResult.ok) {
-      throw new Error('Failed to start system audio recording: ' + sysResult.error);
+    if (!screenSource) {
+      throw new Error('No screen source found for system audio capture');
     }
+
+    // 2. Capture Desktop Audio
+    desktopStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: screenSource.id
+        }
+      },
+      video: {
+        mandatory: {
+          chromeMediaSource: 'desktop',
+          chromeMediaSourceId: screenSource.id
+        }
+      }
+    });
+
+    // 3. Capture Microphone
+    micStream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: false
+    });
+
+    // 4. Set up Audio Context & Mixing
+    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+
+    // Create sources
+    desktopInput = audioContext.createMediaStreamSource(desktopStream);
+    audioInput = audioContext.createMediaStreamSource(micStream);
+
+    // Create processor (Mono)
+    scriptProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
+
+    // Connect inputs to processor
+    // We connect both to the script processor to mix them
+    desktopInput.connect(scriptProcessor);
+    audioInput.connect(scriptProcessor);
+
+    // Connect processor to destination (needed for it to run, even if we don't output to speakers)
+    // BUT: If we connect to destination, user might hear themselves (feedback loop).
+    // Solution: Connect to a GainNode with gain 0, then to destination.
+    const muteNode = audioContext.createGain();
+    muteNode.gain.value = 0;
+    scriptProcessor.connect(muteNode);
+    muteNode.connect(audioContext.destination);
+
+    statusEl.textContent = 'Recording...';
+
+    // 5. Process Audio
+    let chunkBuffer = new Float32Array(0);
+    const samplesPerChunk = (SAMPLE_RATE * CHUNK_TIME_MS) / 1000;
+
+    scriptProcessor.onaudioprocess = (audioProcessingEvent) => {
+      if (!isRecording) return;
+
+      const inputBuffer = audioProcessingEvent.inputBuffer;
+      const inputData = inputBuffer.getChannelData(0); // Mono
+
+      // Accumulate buffer
+      const newBuffer = new Float32Array(chunkBuffer.length + inputData.length);
+      newBuffer.set(chunkBuffer);
+      newBuffer.set(inputData, chunkBuffer.length);
+      chunkBuffer = newBuffer;
+
+      // Check if we have enough for a chunk
+      if (chunkBuffer.length >= samplesPerChunk) {
+        const chunkToSend = chunkBuffer.slice(0, samplesPerChunk);
+        chunkBuffer = chunkBuffer.slice(samplesPerChunk);
+
+        // Convert Float32 to Int16 PCM
+        const pcmData = convertFloat32ToInt16(chunkToSend);
+
+        // Send to Main
+        window.electronAPI.uploadAudioChunk(pcmData.buffer);
+      }
+    };
 
   } catch (err) {
     console.error('Error starting recording:', err);
     statusEl.textContent = 'Error: ' + err.message;
     isRecording = false;
     updateUIState();
+    stopRecording(); // Cleanup
   }
+}
+
+function convertFloat32ToInt16(float32Array) {
+  const int16Array = new Int16Array(float32Array.length);
+  for (let i = 0; i < float32Array.length; i++) {
+    let s = Math.max(-1, Math.min(1, float32Array[i]));
+    int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  return int16Array;
 }
 
 async function stopRecording() {
@@ -97,8 +194,37 @@ async function stopRecording() {
     updateUIState();
     statusEl.textContent = 'Stopping...';
 
-    // Stop System Audio (stops ffmpeg and streaming)
-    await window.electronAPI.stopSysAudio();
+    // Disconnect and close everything
+    if (scriptProcessor) {
+      scriptProcessor.disconnect();
+      scriptProcessor.onaudioprocess = null;
+      scriptProcessor = null;
+    }
+
+    if (audioInput) {
+      audioInput.disconnect();
+      audioInput = null;
+    }
+
+    if (desktopInput) {
+      desktopInput.disconnect();
+      desktopInput = null;
+    }
+
+    if (micStream) {
+      micStream.getTracks().forEach(track => track.stop());
+      micStream = null;
+    }
+
+    if (desktopStream) {
+      desktopStream.getTracks().forEach(track => track.stop());
+      desktopStream = null;
+    }
+
+    if (audioContext) {
+      await audioContext.close();
+      audioContext = null;
+    }
 
     statusEl.textContent = 'Meeting Ended';
 
