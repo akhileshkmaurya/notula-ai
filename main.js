@@ -219,7 +219,19 @@ ipcMain.handle('save-summary-pdf', async (event, { htmlContent }) => {
   }
 });
 
-// --- PulseAudio Helpers ---
+// --- Audio Device Helpers ---
+
+let ffmpegPath;
+if (process.platform === 'linux') {
+  // On Linux, use system ffmpeg because ffmpeg-static lacks PulseAudio support
+  ffmpegPath = 'ffmpeg';
+} else {
+  // On Windows/Mac, use the bundled static binary
+  ffmpegPath = require('ffmpeg-static').replace(
+    'app.asar',
+    'app.asar.unpacked'
+  );
+}
 
 function execPromise(command) {
   return new Promise((resolve, reject) => {
@@ -230,47 +242,65 @@ function execPromise(command) {
   });
 }
 
-async function getDefaultSource() {
+async function getLinuxAudioDevice() {
   try {
-    return await execPromise('pactl get-default-source');
+    const defaultSink = await execPromise('pactl get-default-sink');
+    const stdout = await execPromise('pactl list sources');
+
+    let currentSource = {};
+    const sources = [];
+
+    stdout.split('\n').forEach(line => {
+      if (line.startsWith('Source #')) {
+        if (Object.keys(currentSource).length > 0) sources.push(currentSource);
+        currentSource = {};
+      } else {
+        const [key, ...value] = line.split(':');
+        if (key && value.length > 0) currentSource[key.trim()] = value.join(':').trim();
+      }
+    });
+    if (Object.keys(currentSource).length > 0) sources.push(currentSource);
+
+    for (const source of sources) {
+      if (source['Monitor of Sink'] === defaultSink) return source['Name'];
+    }
+    throw new Error('Could not find monitor source');
   } catch (e) {
-    console.error('Error getting default source:', e);
+    console.error('Linux audio detection failed:', e);
     return null;
   }
 }
 
-async function getSystemAudioDevice() {
-  // Fallback for global system audio
-  return new Promise((resolve, reject) => {
-    exec('pactl get-default-sink', (error, stdout, stderr) => {
-      if (error) return reject(`Failed to get default sink: ${stderr}`);
-      const defaultSink = stdout.trim();
+async function getWindowsAudioDevices() {
+  return new Promise((resolve) => {
+    // ffmpeg -list_devices true -f dshow -i dummy
+    const ffmpeg = spawn(ffmpegPath, ['-list_devices', 'true', '-f', 'dshow', '-i', 'dummy']);
+    let stderr = '';
 
-      exec('pactl list sources', (error, stdout, stderr) => {
-        if (error) return reject(`Failed to list sources: ${stderr}`);
+    ffmpeg.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
 
-        let currentSource = {};
-        const sources = [];
+    ffmpeg.on('close', () => {
+      const devices = [];
+      let isAudio = false;
 
-        stdout.split('\n').forEach(line => {
-          if (line.startsWith('Source #')) {
-            if (Object.keys(currentSource).length > 0) sources.push(currentSource);
-            currentSource = {};
-          } else {
-            const [key, ...value] = line.split(':');
-            if (key && value.length > 0) currentSource[key.trim()] = value.join(':').trim();
-          }
-        });
-        if (Object.keys(currentSource).length > 0) sources.push(currentSource);
-
-        for (const source of sources) {
-          if (source['Monitor of Sink'] === defaultSink) return resolve(source['Name']);
+      stderr.split('\n').forEach(line => {
+        if (line.includes('DirectShow audio devices')) {
+          isAudio = true;
+        } else if (line.includes('DirectShow video devices')) {
+          isAudio = false;
+        } else if (isAudio && line.includes(']  "')) {
+          const match = line.match(/"([^"]+)"/);
+          if (match) devices.push(match[1]);
         }
-        reject('Could not find a monitor source for the default sink.');
       });
+      resolve(devices);
     });
   });
 }
+
+// --- IPC Handlers ---
 
 // --- WAV Header Helper ---
 function writeWavHeader(samples, sampleRate = 16000, numChannels = 1, bitDepth = 16) {
@@ -302,8 +332,6 @@ function writeWavHeader(samples, sampleRate = 16000, numChannels = 1, bitDepth =
   return buffer;
 }
 
-// --- IPC Handlers ---
-
 ipcMain.handle('start-sys-audio', async (event, { filename }) => {
   console.log(`IPC_MAIN: start-sys-audio received.`);
   try {
@@ -311,27 +339,42 @@ ipcMain.handle('start-sys-audio', async (event, { filename }) => {
     if (!fs.existsSync(recordingsDir)) fs.mkdirSync(recordingsDir, { recursive: true });
     const outPath = path.join(recordingsDir, filename);
 
-    // Global system recording (legacy/default/fallback)
-    console.log('Detecting default system audio device...');
-    const device = await getSystemAudioDevice();
-    const micSource = await getDefaultSource();
-    console.log(`Found device: ${device}, Mic: ${micSource}. Starting ffmpeg...`);
+    let args = [];
 
-    const args = [
-      '-f', 'pulse', '-i', device,
-    ];
+    if (process.platform === 'linux') {
+      console.log('Detecting Linux audio devices...');
+      const device = await getLinuxAudioDevice();
+      const micSource = await execPromise('pactl get-default-source').catch(() => null);
 
-    if (micSource) {
-      args.push('-f', 'pulse', '-i', micSource);
-      // Mix to Mono for Server (16kHz, 16-bit, Mono)
-      // [0:a][1:a]amix=inputs=2:duration=longest[a]
-      // We need to mix them and resample to 16000Hz for Whisper
-      args.push('-filter_complex', '[1:a]volume=4.0[mic];[0:a][mic]amix=inputs=2:duration=longest[a]');
-      args.push('-map', '[a]');
+      console.log(`Found device: ${device}, Mic: ${micSource}`);
+
+      args = ['-f', 'pulse', '-i', device];
+      if (micSource) {
+        args.push('-f', 'pulse', '-i', micSource);
+        args.push('-filter_complex', '[1:a]volume=4.0[mic];[0:a][mic]amix=inputs=2:duration=longest[a]');
+        args.push('-map', '[a]');
+      } else {
+        args.push('-ac', '1');
+      }
+    } else if (process.platform === 'win32') {
+      console.log('Detecting Windows audio devices...');
+      const devices = await getWindowsAudioDevices();
+      console.log('Available devices:', devices);
+
+      if (devices.length === 0) throw new Error('No audio devices found');
+
+      // Try to find a "Stereo Mix" or "Wave" for system audio, otherwise use first device (Mic)
+      // Note: Windows doesn't expose system audio loopback easily via dshow without drivers.
+      // We will use the first available input device (usually Microphone).
+      const device = devices[0];
+      console.log(`Using Windows device: ${device}`);
+
+      args = ['-f', 'dshow', '-i', `audio=${device}`];
     } else {
-      args.push('-ac', '1');
+      throw new Error(`Unsupported platform: ${process.platform}`);
     }
 
+    // Common output args
     args.push(
       '-acodec', 'pcm_s16le',
       '-ar', '16000', // Whisper expects 16kHz
@@ -340,22 +383,12 @@ ipcMain.handle('start-sys-audio', async (event, { filename }) => {
       'pipe:1'        // Output to stdout
     );
 
-    // Also save to file for backup (using tee protocol or separate output)
-    // For simplicity, we'll just stream to server now. 
-    // If user wants local backup, we can add a second output.
-    // Let's add a second output to the file for safety.
-    // ffmpeg -i ... -f s16le pipe:1 -y output.wav
-
-    // Modifying args to output to BOTH pipe and file is tricky with spawn and pipes.
-    // Easiest is to just output to pipe, and we can write to file in Node if needed, 
-    // OR just trust the server to save it (which it does).
-    // Let's stick to pipe for now to keep latency low.
-
-    sysAudioProcess = spawn('ffmpeg', args);
+    console.log(`Starting ffmpeg with: ${ffmpegPath} ${args.join(' ')}`);
+    sysAudioProcess = spawn(ffmpegPath, args);
 
     let audioBuffer = Buffer.alloc(0);
     const CHUNK_DURATION_MS = 10000; // 10 seconds
-    const BYTES_PER_SECOND = 16000 * 2; // 16kHz * 16-bit (16-bit PCM is 2 bytes per sample)
+    const BYTES_PER_SECOND = 16000 * 2; // 16kHz * 16-bit
     const CHUNK_SIZE = BYTES_PER_SECOND * (CHUNK_DURATION_MS / 1000);
 
     sysAudioProcess.stdout.on('data', async (data) => {
@@ -374,12 +407,6 @@ ipcMain.handle('start-sys-audio', async (event, { filename }) => {
           const header = writeWavHeader(chunk);
           const wavData = Buffer.concat([header, chunk]);
 
-          // Send to server
-          // Use a polyfill for Blob and FormData if running in Node.js context without browser APIs
-          // For Electron's main process, we need to ensure these are available or use alternatives.
-          // Node.js v18+ has global Blob and FormData. For older versions or explicit control,
-          // one might use 'form-data' package and convert Buffer to Blob.
-          // Assuming Node.js v18+ or Electron's environment provides these.
           const blob = new Blob([wavData], { type: 'audio/wav' });
           const formData = new FormData();
           formData.append('file', blob, 'chunk.wav');
@@ -413,7 +440,7 @@ ipcMain.handle('start-sys-audio', async (event, { filename }) => {
     });
 
     sysAudioProcess.stderr.on('data', (data) => {
-      // console.error(`ffmpeg stderr: ${data}`); // Too noisy
+      console.error(`ffmpeg stderr: ${data}`);
     });
 
     sysAudioProcess.on('close', (code) => console.log(`ffmpeg process exited with code ${code}`));
@@ -429,7 +456,11 @@ ipcMain.handle('start-sys-audio', async (event, { filename }) => {
 ipcMain.handle('stop-sys-audio', async (event) => {
   try {
     if (sysAudioProcess) {
-      sysAudioProcess.kill('SIGINT');
+      if (process.platform === 'win32') {
+        spawn('taskkill', ['/pid', sysAudioProcess.pid, '/f', '/t']);
+      } else {
+        sysAudioProcess.kill('SIGINT');
+      }
       sysAudioProcess = null;
     }
     return { ok: true };
