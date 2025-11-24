@@ -2,9 +2,10 @@ import os
 import io
 import asyncio
 import numpy as np
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
+from auth_middleware import get_current_user
 
 # Initialize FastAPI
 app = FastAPI()
@@ -30,8 +31,14 @@ async def root():
     return {"message": "Notula AI Server is running (REST Mode)"}
 
 @app.post("/transcribe")
-async def transcribe_audio(file: UploadFile = File(...)):
+async def transcribe_audio(
+    file: UploadFile = File(...),
+    current_user: dict = Depends(get_current_user)
+):
     try:
+        # Log the authenticated user
+        print(f"Transcribing audio for user: {current_user.get('email')}")
+        
         # Read file content
         content = await file.read()
         
@@ -60,7 +67,7 @@ async def transcribe_audio(file: UploadFile = File(...)):
         text = " ".join([segment.text for segment in segments]).strip()
         
         print(f"Transcribed: {text}")
-        return {"text": text}
+        return {"text": text, "user": current_user.get('email')}
 
     except Exception as e:
         print(f"Error during transcription: {e}")

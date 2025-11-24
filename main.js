@@ -3,11 +3,34 @@ const path = require('path');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
 require('dotenv').config();
+const googleAuth = require('./auth');
 
 // Server Configuration
 const SERVER_URL = 'http://35.205.52.222:8000';
 let sysAudioProcess = null;
 let mainWindow = null;
+let loginWindow = null;
+
+function createLoginWindow() {
+  loginWindow = new BrowserWindow({
+    width: 500,
+    height: 650,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    resizable: false,
+    frame: true,
+  });
+
+  loginWindow.loadFile('login.html');
+  // loginWindow.webContents.openDevTools();
+
+  loginWindow.on('closed', () => {
+    loginWindow = null;
+  });
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -29,10 +52,10 @@ function createWindow() {
 app.disableHardwareAcceleration();
 
 app.whenReady().then(() => {
-  createWindow();
+  createLoginWindow(); // Show login first
 
   app.on('activate', function () {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+    if (BrowserWindow.getAllWindows().length === 0) createLoginWindow();
   });
 });
 
@@ -50,6 +73,31 @@ ipcMain.handle('save-transcript', async (event, { filename, content }) => {
     return { ok: true, path: outPath };
   } catch (err) {
     return { ok: false, error: String(err) };
+  }
+});
+
+// Google Login Handler
+ipcMain.handle('google-login', async (event) => {
+  try {
+    console.log('Starting Google OAuth login...');
+    const result = await googleAuth.login();
+
+    if (result.success) {
+      console.log('Login successful for user:', result.userInfo.email);
+
+      // Close login window and open main window
+      if (loginWindow) {
+        loginWindow.close();
+      }
+      createWindow();
+
+      return { success: true, user: result.userInfo };
+    } else {
+      return { success: false, error: 'Authentication failed' };
+    }
+  } catch (err) {
+    console.error('Google login error:', err);
+    return { success: false, error: err.message };
   }
 });
 
@@ -312,8 +360,16 @@ ipcMain.handle('start-sys-audio', async (event, { filename }) => {
           const formData = new FormData();
           formData.append('file', blob, 'chunk.wav');
 
+          // Get the ID token for authentication
+          const idToken = googleAuth.getIdToken();
+          const headers = {};
+          if (idToken) {
+            headers['Authorization'] = `Bearer ${idToken}`;
+          }
+
           const response = await fetch(`${SERVER_URL}/transcribe`, {
             method: 'POST',
+            headers: headers,
             body: formData
           });
 
