@@ -10,4 +10,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSummaryPdf: (htmlContent) => ipcRenderer.invoke('save-summary-pdf', { htmlContent }),
   onTranscriptUpdate: (callback) => ipcRenderer.on('transcript-update', (_event, value) => callback(value)),
   logout: () => ipcRenderer.invoke('logout'),
+  getPlatform: () => process.platform,
 });

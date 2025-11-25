@@ -3,6 +3,9 @@ const stopBtn = document.getElementById('stopBtn');
 const saveBtn = document.getElementById('saveBtn');
 const statusEl = document.getElementById('status');
 const transcriptEl = document.getElementById('transcript');
+const systemDeviceSelect = document.getElementById('systemDeviceSelect');
+const micDeviceSelect = document.getElementById('micDeviceSelect');
+const refreshDevicesBtn = document.getElementById('refreshDevicesBtn');
 
 let sysPath = null;
 let isRecording = false;
@@ -78,6 +81,55 @@ let audioBuffer = [];
 const SAMPLE_RATE = 16000;
 const BUFFER_SIZE = 4096;
 const CHUNK_TIME_MS = 10000; // 10 seconds
+let selectedSystemDeviceId = null;
+let selectedMicDeviceId = null;
+
+async function enumerateAudioDevices() {
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(d => d.kind === 'audioinput');
+
+    // Preserve previous selection if possible
+    const prevSystem = selectedSystemDeviceId;
+    const prevMic = selectedMicDeviceId;
+
+    systemDeviceSelect.innerHTML = '<option value="">(None / Use display capture)</option>';
+    micDeviceSelect.innerHTML = '';
+
+    audioInputs.forEach(d => {
+      const opt1 = document.createElement('option');
+      opt1.value = d.deviceId;
+      opt1.textContent = d.label || 'Audio In';
+      systemDeviceSelect.appendChild(opt1);
+
+      const opt2 = document.createElement('option');
+      opt2.value = d.deviceId;
+      opt2.textContent = d.label || 'Audio In';
+      micDeviceSelect.appendChild(opt2);
+    });
+
+    // Restore selections if still present
+    if (prevSystem) systemDeviceSelect.value = prevSystem;
+    if (prevMic) micDeviceSelect.value = prevMic;
+
+    // Default selection
+    if (!micDeviceSelect.value && micDeviceSelect.options.length) {
+      micDeviceSelect.selectedIndex = 0;
+    }
+    selectedSystemDeviceId = systemDeviceSelect.value || null;
+    selectedMicDeviceId = micDeviceSelect.value || null;
+  } catch (e) {
+    console.warn('Failed to enumerate audio devices:', e);
+  }
+}
+
+systemDeviceSelect.addEventListener('change', () => {
+  selectedSystemDeviceId = systemDeviceSelect.value || null;
+});
+micDeviceSelect.addEventListener('change', () => {
+  selectedMicDeviceId = micDeviceSelect.value || null;
+});
+refreshDevicesBtn.addEventListener('click', enumerateAudioDevices);
 
 async function startRecording() {
   try {
@@ -85,61 +137,101 @@ async function startRecording() {
     updateUIState();
     statusEl.textContent = 'Initializing audio...';
     transcriptEl.innerHTML = '';
+    const platform = window.electronAPI.getPlatform();
+    let systemAudioSupported = true;
 
-    // 1. Get Desktop Source ID
-    const sources = await window.electronAPI.getSources();
-    const screenSource = sources.find(s => s.name === 'Entire Screen' || s.name === 'Screen 1') || sources[0];
-
-    if (!screenSource) {
-      throw new Error('No screen source found for system audio capture');
-    }
-
-    // 2. Capture Desktop Audio
-    desktopStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        mandatory: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: screenSource.id
-        }
-      },
-      video: {
-        mandatory: {
-          chromeMediaSource: 'desktop',
-          chromeMediaSourceId: screenSource.id
+    // Desktop/system audio capture strategy differs per platform.
+    if (platform === 'darwin') {
+      // Prefer explicit loopback device selection if provided.
+      if (selectedSystemDeviceId) {
+        try {
+          desktopStream = await navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: { exact: selectedSystemDeviceId } },
+            video: false
+          });
+        } catch (e) {
+          console.warn('Failed to use selected system device, attempting display capture:', e);
         }
       }
-    });
+      if (!desktopStream) {
+        try {
+          desktopStream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+          const hasAudioTrack = desktopStream.getAudioTracks().length > 0;
+          if (!hasAudioTrack) systemAudioSupported = false;
+        } catch (e) {
+          console.warn('macOS display media audio failed; system audio unavailable:', e);
+          desktopStream = null;
+          systemAudioSupported = false;
+        }
+      }
+    } else {
+      // Linux/Windows original approach using chromeMediaSource via desktopCapturer.
+      const sources = await window.electronAPI.getSources();
+      const screenSource = sources.find(s => s.name === 'Entire Screen' || s.name === 'Screen 1') || sources[0];
+      if (!screenSource) throw new Error('No screen source found for system audio capture');
+      try {
+        desktopStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: screenSource.id
+            }
+          },
+          video: {
+            mandatory: {
+              chromeMediaSource: 'desktop',
+              chromeMediaSourceId: screenSource.id
+            }
+          }
+        });
+      } catch (e) {
+        console.warn('Desktop audio capture failed, continuing with mic only:', e);
+        desktopStream = null;
+        systemAudioSupported = false;
+      }
+    }
 
-    // 3. Capture Microphone
-    micStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: false
-    });
+    // Microphone capture (always attempted / selected device if available)
+    if (selectedMicDeviceId) {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: selectedMicDeviceId } }, video: false });
+    } else {
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    }
 
-    // 4. Set up Audio Context & Mixing
+    // Set up Audio Context & Mixing
     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
 
-    // Create sources
-    desktopInput = audioContext.createMediaStreamSource(desktopStream);
-    audioInput = audioContext.createMediaStreamSource(micStream);
-
-    // Create processor (Mono)
+    // Create processor (Mono output)
     scriptProcessor = audioContext.createScriptProcessor(BUFFER_SIZE, 1, 1);
 
-    // Connect inputs to processor
-    // We connect both to the script processor to mix them
-    desktopInput.connect(scriptProcessor);
-    audioInput.connect(scriptProcessor);
-
-    // Connect processor to destination (needed for it to run, even if we don't output to speakers)
-    // BUT: If we connect to destination, user might hear themselves (feedback loop).
-    // Solution: Connect to a GainNode with gain 0, then to destination.
+    // Build mixing graph: connect available sources with gain reduction to avoid clipping.
     const muteNode = audioContext.createGain();
-    muteNode.gain.value = 0;
+    muteNode.gain.value = 0; // Prevent feedback to speakers.
     scriptProcessor.connect(muteNode);
     muteNode.connect(audioContext.destination);
 
-    statusEl.textContent = 'Recording...';
+    const mixGainMic = audioContext.createGain();
+    mixGainMic.gain.value = 0.7;
+    audioInput = audioContext.createMediaStreamSource(micStream);
+    audioInput.connect(mixGainMic);
+    mixGainMic.connect(scriptProcessor);
+
+    if (desktopStream) {
+      const mixGainDesktop = audioContext.createGain();
+      mixGainDesktop.gain.value = 0.7;
+      desktopInput = audioContext.createMediaStreamSource(desktopStream);
+      desktopInput.connect(mixGainDesktop);
+      mixGainDesktop.connect(scriptProcessor);
+    }
+
+    statusEl.textContent = systemAudioSupported ? 'Recording...' : 'Recording (system audio unavailable on this setup)';
+    if (!systemAudioSupported && platform === 'darwin') {
+      const notice = document.createElement('div');
+      notice.style.fontSize = '12px';
+      notice.style.color = '#b45309';
+      notice.textContent = 'Tip: For system audio on macOS install a loopback device (e.g. BlackHole) and set it as output.';
+      statusEl.appendChild(notice);
+    }
 
     // 5. Process Audio
     let chunkBuffer = new Float32Array(0);
@@ -342,3 +434,10 @@ document.getElementById('logoutBtn').addEventListener('click', () => {
     window.electronAPI.logout();
   }
 });
+
+// Initial device population
+enumerateAudioDevices();
+// Some browsers require an initial getUserMedia call to unlock labels; do a silent mic probe.
+navigator.mediaDevices.getUserMedia({ audio: true, video: false }).then(() => {
+  enumerateAudioDevices();
+}).catch(() => {});

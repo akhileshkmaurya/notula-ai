@@ -25,6 +25,17 @@
       <button id="summarizeBtn" disabled>Generate AI Summary</button>
       <button id="saveBtn" disabled>Export Transcript</button>
       <button id="exportPdfBtn" disabled>Export PDF</button>
+      <div style="display:flex; gap:12px; flex-wrap:wrap; margin-top:12px; width:100%">
+        <label style="display:flex; flex-direction:column; font-size:0.75rem; flex:1; min-width:200px;">
+          System / Loopback Device
+          <select id="systemDeviceSelect" style="margin-top:4px; padding:4px; font-size:0.75rem;"></select>
+        </label>
+        <label style="display:flex; flex-direction:column; font-size:0.75rem; flex:1; min-width:200px;">
+          Microphone Device
+          <select id="micDeviceSelect" style="margin-top:4px; padding:4px; font-size:0.75rem;"></select>
+        </label>
+        <button id="refreshDevicesBtn" style="padding:6px 10px; font-size:0.7rem; align-self:flex-end;">Refresh Devices</button>
+      </div>
     </div>
 
     <!-- Main Content -->
