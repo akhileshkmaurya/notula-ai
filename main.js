@@ -150,11 +150,11 @@ ipcMain.handle('save-api-key', async (event, { key }) => {
 });
 
 // Summarize
-const OpenAI = require('openai');
+// const OpenAI = require('openai');
 
 ipcMain.handle('summarize-meeting', async (event, { transcript }) => {
   try {
-    console.log(`Summarizing meeting with Gemini...`);
+    console.log(`Summarizing meeting via Server...`);
 
     let apiKey = googleAuth.getGeminiApiKey();
     if (!apiKey) {
@@ -164,37 +164,38 @@ ipcMain.handle('summarize-meeting', async (event, { transcript }) => {
     if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
       return { ok: false, error: 'MISSING_API_KEY' };
     }
-    console.log(`Loaded API Key: ${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`);
 
-    const clientConfig = {
-      apiKey: apiKey,
-      baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/'
+    // Get ID Token for authentication
+    const idToken = googleAuth.getIdToken();
+    const headers = {
+      'Content-Type': 'application/json'
     };
+    if (idToken) {
+      headers['Authorization'] = `Bearer ${idToken}`;
+    }
 
-    const openai = new OpenAI(clientConfig);
-
-    const prompt = `
-You are an expert minute-taker. 
-Please analyze the following meeting transcript and provide a structured summary.
-Use EXACTLY these section headers (Markdown H2):
-## Executive Summary
-## Action Items
-## Decisions
-
-For Action Items, use bullet points.
-For Decisions, use bullet points.
-
-Transcript:
-${transcript}
-    `.trim();
-
-    const completion = await openai.chat.completions.create({
-      messages: [{ role: 'user', content: prompt }],
-      model: 'gemini-flash-latest',
+    const response = await fetch(`${SERVER_URL}/summarize`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify({
+        transcript: transcript,
+        apiKey: apiKey
+      })
     });
 
-    const summary = completion.choices[0].message.content;
-    return { ok: true, summary };
+    if (response.ok) {
+      const result = await response.json();
+      return { ok: true, summary: result.summary };
+    } else {
+      const errorText = await response.text();
+      console.error('Server summarization error:', errorText);
+      try {
+        const errorJson = JSON.parse(errorText);
+        return { ok: false, error: errorJson.detail || response.statusText };
+      } catch (e) {
+        return { ok: false, error: response.statusText };
+      }
+    }
   } catch (err) {
     console.error('Summarization error:', err);
     return { ok: false, error: String(err) };

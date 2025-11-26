@@ -8,6 +8,8 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 from auth_middleware import get_current_user
+from pydantic import BaseModel
+from openai import OpenAI
 import logging
 
 # Configure minimal logging
@@ -50,6 +52,64 @@ async def startup_event():
 @app.get("/")
 async def root():
     return {"message": "Notula AI Server is running (REST Mode)"}
+
+class SummarizeRequest(BaseModel):
+    transcript: str
+    apiKey: str
+
+@app.post("/summarize")
+async def summarize_meeting(
+    request: SummarizeRequest,
+    current_user: dict = Depends(get_current_user)
+):
+    start_time = time.time()
+    user_email = current_user.get('email', 'unknown')
+
+    try:
+        if not request.apiKey:
+             raise HTTPException(status_code=400, detail="API Key is required")
+
+        client = OpenAI(
+            api_key=request.apiKey,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
+        )
+
+        prompt = f"""
+You are an expert minute-taker. 
+Please analyze the following meeting transcript and provide a structured summary.
+Use EXACTLY these section headers (Markdown H2):
+## Executive Summary
+## Action Items
+## Decisions
+
+For Action Items, use bullet points.
+For Decisions, use bullet points.
+
+Transcript:
+{request.transcript}
+        """.strip()
+
+        completion = client.chat.completions.create(
+            model="gemini-flash-latest",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
+            ]
+        )
+
+        summary = completion.choices[0].message.content
+        
+        response_time = time.time() - start_time
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"{timestamp} | {user_email} | SUMMARIZE | {response_time:.2f}s", flush=True)
+
+        return {"summary": summary}
+
+    except Exception as e:
+        response_time = time.time() - start_time
+        timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"{timestamp} | {user_email} | SUMMARIZE | {response_time:.2f}s | ERROR: {str(e)}", flush=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/transcribe")
 async def transcribe_audio(
