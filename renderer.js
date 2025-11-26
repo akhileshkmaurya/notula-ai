@@ -55,6 +55,12 @@ const summarizeBtn = document.getElementById('summarizeBtn');
 const summaryEl = document.getElementById('summary');
 const exportPdfBtn = document.getElementById('exportPdfBtn');
 
+// API Key Dialog Elements
+const apiKeyDialog = document.getElementById('apiKeyDialog');
+const apiKeyInput = document.getElementById('apiKeyInput');
+const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+const settingsBtn = document.getElementById('settingsBtn');
+
 /* ---------- Main Flow ---------- */
 
 // Real-time transcript updates
@@ -266,12 +272,46 @@ async function summarizeMeeting() {
     summaryEl.innerHTML = formattedHtml;
     statusEl.textContent = 'Summary generated';
     exportPdfBtn.disabled = false;
+  } else if (resp.error === 'MISSING_API_KEY') {
+    statusEl.textContent = 'API Key required';
+    apiKeyDialog.showModal();
   } else {
     summaryEl.textContent = "Error generating summary: " + resp.error;
     statusEl.textContent = 'Summary failed';
   }
   summarizeBtn.disabled = false;
 }
+
+// API Key Dialog Handler
+apiKeyDialog.addEventListener('close', async () => {
+  if (apiKeyDialog.returnValue === 'save') {
+    const key = apiKeyInput.value.trim();
+    if (key) {
+      const result = await window.electronAPI.saveApiKey(key);
+      if (result.ok) {
+        // If triggered by missing key error, retry summarization
+        if (statusEl.textContent === 'API Key required') {
+          summarizeMeeting();
+        } else {
+          alert('API Key saved successfully!');
+        }
+      } else {
+        alert('Failed to save API key: ' + result.error);
+      }
+    }
+  }
+});
+
+// Settings Button Handler
+settingsBtn.addEventListener('click', async () => {
+  const result = await window.electronAPI.getApiKey();
+  if (result.ok && result.key) {
+    apiKeyInput.value = result.key;
+  } else {
+    apiKeyInput.value = '';
+  }
+  apiKeyDialog.showModal();
+});
 
 function formatSummaryToHtml(markdown) {
   // Simple parser for the specific structure we requested

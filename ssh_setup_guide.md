@@ -36,7 +36,7 @@ Copy the entire output (starts with `ssh-rsa` and ends with `your-username`).
 Now try to connect from your local terminal:
 
 ```bash
-ssh -i ~/.ssh/gcp_key your-username@35.205.52.222
+ssh -i ~/.ssh/gcp_key your-username@34.78.56.154
 ```
 
 ## Step 5: Configure `deploy.sh`

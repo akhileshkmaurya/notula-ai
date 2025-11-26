@@ -9,5 +9,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   summarizeMeeting: (transcript) => ipcRenderer.invoke('summarize-meeting', { transcript }),
   saveSummaryPdf: (htmlContent) => ipcRenderer.invoke('save-summary-pdf', { htmlContent }),
   onTranscriptUpdate: (callback) => ipcRenderer.on('transcript-update', (_event, value) => callback(value)),
+  saveApiKey: (key) => ipcRenderer.invoke('save-api-key', { key }),
+  getApiKey: () => ipcRenderer.invoke('get-api-key'),
   logout: () => ipcRenderer.invoke('logout'),
 });

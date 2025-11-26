@@ -6,7 +6,7 @@ require('dotenv').config();
 const googleAuth = require('./auth');
 
 // Server Configuration
-const SERVER_URL = 'http://35.205.52.222:8000';
+const SERVER_URL = 'http://34.78.56.154:8000';
 let sysAudioProcess = null;
 let mainWindow = null;
 let loginWindow = null;
@@ -57,9 +57,11 @@ app.whenReady().then(() => {
 
   if (hasSession && googleAuth.isAuthenticated()) {
     console.log('Restored session for user:', googleAuth.getUserInfo().email);
+    googleAuth.loadSettings(); // Ensure settings are loaded
     createWindow();
   } else {
     console.log('No valid session found, showing login window');
+    googleAuth.loadSettings(); // Ensure settings are loaded even if not logged in
     createLoginWindow();
   }
 
@@ -125,6 +127,28 @@ ipcMain.handle('google-login', async (event) => {
   }
 });
 
+// Get API Key
+ipcMain.handle('get-api-key', async (event) => {
+  try {
+    const key = googleAuth.getGeminiApiKey();
+    return { ok: true, key };
+  } catch (err) {
+    console.error('Error getting API key:', err);
+    return { ok: false, error: err.message };
+  }
+});
+
+// Save API Key
+ipcMain.handle('save-api-key', async (event, { key }) => {
+  try {
+    googleAuth.setGeminiApiKey(key);
+    return { ok: true };
+  } catch (err) {
+    console.error('Error saving API key:', err);
+    return { ok: false, error: err.message };
+  }
+});
+
 // Summarize
 const OpenAI = require('openai');
 
@@ -132,9 +156,13 @@ ipcMain.handle('summarize-meeting', async (event, { transcript }) => {
   try {
     console.log(`Summarizing meeting with Gemini...`);
 
-    const apiKey = process.env.GEMINI_API_KEY;
+    let apiKey = googleAuth.getGeminiApiKey();
+    if (!apiKey) {
+      apiKey = process.env.GEMINI_API_KEY;
+    }
+
     if (!apiKey || apiKey === 'YOUR_API_KEY_HERE') {
-      return { ok: false, error: 'Missing GEMINI_API_KEY in .env file' };
+      return { ok: false, error: 'MISSING_API_KEY' };
     }
     console.log(`Loaded API Key: ${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`);
 

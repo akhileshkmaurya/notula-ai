@@ -14,6 +14,7 @@
       <h1>Notula AI</h1>
       <div class="header-right">
         <div id="status" class="status-badge">Ready</div>
+        <button id="settingsBtn" style="padding: 6px 12px; font-size: 0.8rem; margin-right: 8px;">Settings</button>
         <button id="logoutBtn" class="danger" style="padding: 6px 12px; font-size: 0.8rem;">Sign Out</button>
       </div>
     </div>
@@ -42,6 +43,25 @@
       </div>
     </div>
   </div>
+
+  <!-- API Key Dialog -->
+  <dialog id="apiKeyDialog">
+    <form method="dialog">
+      <h2>Enter Gemini API Key</h2>
+      <p>To generate summaries, you need to provide your own Google Gemini API Key.</p>
+      <div class="input-group">
+        <input type="password" id="apiKeyInput" placeholder="Enter your API Key" required>
+      </div>
+      <div class="dialog-actions">
+        <button value="cancel" formnovalidate>Cancel</button>
+        <button id="saveApiKeyBtn" value="save" class="primary">Save & Continue</button>
+      </div>
+      <p class="help-text">
+        <small>Don't have a key? <a href="#"
+            onclick="window.electronAPI.openExternal('https://aistudio.google.com/app/apikey')">Get one here</a></small>
+      </p>
+    </form>
+  </dialog>
 
   <script src="renderer.js"></script>
 </body>

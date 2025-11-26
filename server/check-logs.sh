@@ -3,7 +3,7 @@
 # Script to check server logs and status on the remote server
 
 REMOTE_USER="legion"
-REMOTE_HOST="35.205.52.222"
+REMOTE_HOST="34.78.56.154"
 KEY_PATH="-i ~/.ssh/gcp_key"
 
 echo "================================================"

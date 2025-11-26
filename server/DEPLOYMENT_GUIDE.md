@@ -15,17 +15,17 @@ cd /home/legion/project91/notula-ai/server
 
 ### View Live Logs
 ```bash
-ssh -i ~/.ssh/gcp_key legion@35.205.52.222 'sudo docker logs -f notula-app'
+ssh -i ~/.ssh/gcp_key legion@34.78.56.154 'sudo docker logs -f notula-app'
 ```
 
 ### Restart Server
 ```bash
-ssh -i ~/.ssh/gcp_key legion@35.205.52.222 'sudo docker restart notula-app'
+ssh -i ~/.ssh/gcp_key legion@34.78.56.154 'sudo docker restart notula-app'
 ```
 
 ### Check Server Status
 ```bash
-curl http://35.205.52.222:8000/
+curl http://34.78.56.154:8000/
 # Should return: {"message":"Notula AI Server is running (REST Mode)"}
 ```
 
@@ -69,7 +69,7 @@ The `deploy.sh` script:
 ### Connection Refused
 ```bash
 # Check if container is running
-ssh -i ~/.ssh/gcp_key legion@35.205.52.222 'sudo docker ps | grep notula-app'
+ssh -i ~/.ssh/gcp_key legion@34.78.56.154 'sudo docker ps | grep notula-app'
 
 # Check firewall
 # Ensure port 8000 is open in Google Cloud Console
@@ -78,7 +78,7 @@ ssh -i ~/.ssh/gcp_key legion@35.205.52.222 'sudo docker ps | grep notula-app'
 ### Authentication Errors
 ```bash
 # Verify GOOGLE_CLIENT_ID is set
-ssh -i ~/.ssh/gcp_key legion@35.205.52.222 'cat ~/notula-server/.env'
+ssh -i ~/.ssh/gcp_key legion@34.78.56.154 'cat ~/notula-server/.env'
 
 # Check server logs for auth errors
 ./check-logs.sh
@@ -113,17 +113,17 @@ WHISPER_MODEL=base
 
 ### Check if Server is Healthy
 ```bash
-curl http://35.205.52.222:8000/
+curl http://34.78.56.154:8000/
 ```
 
 ### Watch Logs in Real-Time
 ```bash
-ssh -i ~/.ssh/gcp_key legion@35.205.52.222 'sudo docker logs -f notula-app'
+ssh -i ~/.ssh/gcp_key legion@34.78.56.154 'sudo docker logs -f notula-app'
 ```
 
 ### Check Resource Usage
 ```bash
-ssh -i ~/.ssh/gcp_key legion@35.205.52.222 'sudo docker stats notula-app'
+ssh -i ~/.ssh/gcp_key legion@34.78.56.154 'sudo docker stats notula-app'
 ```
 
 ## Updates
@@ -149,7 +149,7 @@ The deployment script handles:
 
 ## Current Status
 
-✅ **Server is running at**: http://35.205.52.222:8000  
+✅ **Server is running at**: http://34.78.56.154:8000  
 ✅ **Authentication**: Enabled with Google OAuth  
 ✅ **Whisper Model**: base  
 ✅ **Auto-restart**: Enabled  

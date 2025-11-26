@@ -13,6 +13,8 @@ class GoogleAuthService {
     this.idToken = null;
     this.userInfo = null;
     this.tokenPath = null;
+    this.settingsPath = null;
+    this.geminiApiKey = null;
 
     // These should be set in .env file
     this.clientId = process.env.GOOGLE_CLIENT_ID;
@@ -29,6 +31,35 @@ class GoogleAuthService {
   init() {
     if (!this.tokenPath) {
       this.tokenPath = path.join(app.getPath('userData'), 'auth_session.json');
+    }
+    if (!this.settingsPath) {
+      this.settingsPath = path.join(app.getPath('userData'), 'settings.json');
+    }
+  }
+
+  // Load settings (API Key)
+  loadSettings() {
+    this.init();
+    try {
+      if (fs.existsSync(this.settingsPath)) {
+        const settings = JSON.parse(fs.readFileSync(this.settingsPath, 'utf8'));
+        this.geminiApiKey = settings.geminiApiKey;
+      }
+    } catch (err) {
+      console.error('Failed to load settings:', err);
+    }
+  }
+
+  // Save settings
+  saveSettings() {
+    this.init();
+    const settings = {
+      geminiApiKey: this.geminiApiKey
+    };
+    try {
+      fs.writeFileSync(this.settingsPath, JSON.stringify(settings));
+    } catch (err) {
+      console.error('Failed to save settings:', err);
     }
   }
 
@@ -58,6 +89,8 @@ class GoogleAuthService {
         this.refreshToken = session.refreshToken;
         this.idToken = session.idToken;
         this.userInfo = session.userInfo;
+        // Load settings separately
+        this.loadSettings();
         return true;
       }
     } catch (err) {
@@ -314,6 +347,8 @@ class GoogleAuthService {
     this.refreshToken = null;
     this.idToken = null;
     this.userInfo = null;
+    // Do NOT clear geminiApiKey on logout
+    // this.geminiApiKey = null;
 
     // Remove session file
     this.init();
@@ -324,6 +359,15 @@ class GoogleAuthService {
     } catch (err) {
       console.error('Failed to clear session:', err);
     }
+  }
+
+  setGeminiApiKey(key) {
+    this.geminiApiKey = key;
+    this.saveSettings();
+  }
+
+  getGeminiApiKey() {
+    return this.geminiApiKey;
   }
 }
 
