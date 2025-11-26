@@ -10,7 +10,11 @@ from faster_whisper import WhisperModel
 from auth_middleware import get_current_user
 from pydantic import BaseModel
 from openai import OpenAI
+from dotenv import load_dotenv
 import logging
+
+# Load environment variables
+load_dotenv()
 
 # Configure minimal logging
 logging.basicConfig(
@@ -36,7 +40,11 @@ app.add_middleware(
 
 # Initialize Whisper Model (only log once at startup)
 # 'tiny.en' is much faster for English and suitable for CPU
+# Initialize Whisper Model (only log once at startup)
+# 'tiny.en' is much faster for English and suitable for CPU
+# For multilingual support (e.g. Dutch), use 'tiny', 'base', or 'small'
 MODEL_SIZE = os.getenv("WHISPER_MODEL", "tiny.en")
+WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en")
 
 # Limit threads to avoid contention on small VMs (e2-medium has 2 vCPUs)
 # intra_threads=4 is good for latency on single request, but for concurrency on 2 cores,
@@ -47,7 +55,7 @@ model = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8", cpu_threads=
 async def startup_event():
     """Print minimal startup confirmation"""
     timestamp = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
-    print(f"{timestamp} | SERVER_STARTED | model={MODEL_SIZE} | threads=4", flush=True)
+    print(f"{timestamp} | SERVER_STARTED | model={MODEL_SIZE} | language={WHISPER_LANGUAGE} | threads=4", flush=True)
 
 @app.get("/")
 async def root():
@@ -131,7 +139,7 @@ async def transcribe_audio(
             lambda: list(model.transcribe(
                 audio_file, 
                 beam_size=1, 
-                language="en", 
+                language=WHISPER_LANGUAGE, 
                 vad_filter=True,
                 temperature=0.0
             ))
