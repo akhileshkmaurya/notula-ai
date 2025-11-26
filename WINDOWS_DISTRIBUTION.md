@@ -43,7 +43,18 @@ You can build the Windows `.exe` from your Linux machine.
     ```bash
     sudo apt install wine
     ```
-    *(If you don't have Wine, the build might still work but with a default icon or warnings)*
+    **Important**: You likely need `wine32` for the build to succeed. If you see an error about missing `wine32`, run:
+    ```bash
+    sudo dpkg --add-architecture i386
+    sudo apt-get update
+    sudo apt-get install wine32:i386
+    ```
+    **If you still see errors like `kernel32.dll not found`**:
+    This means your Wine configuration is corrupted. You need to reset it:
+    ```bash
+    rm -rf ~/.wine
+    ```
+    Then run the build command again. Wine will regenerate the configuration automatically.
 
 2.  **Run the build command**:
     ```bash

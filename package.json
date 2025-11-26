@@ -20,6 +20,13 @@
     "directories": {
       "output": "dist"
     },
+    "files": [
+      "**/*",
+      "!server/**",
+      "!dist/**",
+      "!.git/**",
+      "!.gitignore"
+    ],
     "win": {
       "target": "nsis",
       "icon": "assets/icon.ico"
